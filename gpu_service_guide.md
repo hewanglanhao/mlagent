@@ -157,6 +157,9 @@ Example:
 
 Use this information to access your environment.
 
+### Workspace
+`/workspace` is a persistent mounted directory tied to your ID, but it is not shared across different servers.
+
 ---
 
 ## 4. Stop Your Environment
