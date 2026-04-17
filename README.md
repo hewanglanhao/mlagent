@@ -14,10 +14,7 @@ If you start a CPU-only container without using a GPU and only want to access yo
 
 - The `/start` interface now returns a `mission_id`.
 
-After starting a task, you should use `/submit_status` with the `mission_id` to check:
-
-* the current task status
-* the SSH port assigned to the task
+After starting a task, you should use `/submit_status` with the `mission_id` to check the SSH port assigned to the task.
 
 
 - Each container started by `/start` can run for **at most 10 hours**.
