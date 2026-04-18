@@ -1,0 +1,61 @@
+Generate a brand-new CUDA/C++ micro-benchmark from scratch.
+
+This project's real target file contains these metrics:
+- `launch__sm_count`
+- `dram__bytes_read.sum.per_second`
+- `dram__bytes_write.sum.per_second`
+- `device__attribute_max_gpu_frequency_khz`
+- `device__attribute_max_mem_frequency_khz`
+- `device__attribute_fb_bus_width`
+- `sm__throughput.avg.pct_of_peak_sustained_elapsed`
+- `gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed`
+
+Current plan:
+{plan_json}
+
+Current round:
+{round_index}
+
+Previous feedback to incorporate:
+{feedback}
+
+Target-specific guidance:
+{target_specific_guidance}
+
+Hard requirements:
+- Return ONLY raw CUDA/C++ source code. No markdown fences. No commentary.
+- The source must be a single self-contained `.cu` file that compiles with `nvcc -O3 -std=c++17`.
+- Do not depend on any external libraries other than the CUDA runtime and the C++ standard library.
+- Do not use `cudaGetDeviceProperties`, `nvidia-smi`, or other direct device-attribute queries as the primary measurement source.
+- The program must actually measure the target behavior with kernels and timing logic.
+- Because the real targets are mostly direct `ncu` metrics, the benchmark should focus on creating a trustworthy profiling condition and exporting cross-check measurements in JSON.
+- The final stdout must end with exactly one valid JSON object.
+- The JSON object must contain:
+  - `probe_family`: string
+  - `kernel_name`: string
+  - `timings_ms`: array of numeric measurements
+  - `parameters`: object
+  - `derived_metrics`: object
+  - `notes`: array of short strings
+- If the probe uses a sweep, include `sweep_points` as an array of objects in the JSON output.
+- Keep kernels deterministic and long enough that `ncu` can profile them.
+
+Probe-family guidance:
+- `latency_probe`: use dependent pointer chasing or another dependency-serialized load chain. Sweep working-set size to expose cache/DRAM latency cliffs.
+- `bandwidth_probe`: use a DRAM-sized working set, coalesced accesses, repeated loops, and separate read/write phases or kernels. Report `read_bytes_per_second` and `write_bytes_per_second`.
+- `bank_conflict_probe`: compare conflict-free and conflicted shared-memory patterns and report `bank_conflict_penalty_cycles`.
+- `cache_capacity_probe`: sweep working-set size and infer a capacity cliff. Report `l2_capacity_bytes` or `cache_capacity_bytes`.
+- `frequency_probe`: use a compute-heavy FMA-dominant kernel, sustain activity for long enough, and report `sm_clock_khz_estimate` if you can infer it.
+- `exploratory_probe`: create the simplest benchmark that can still expose the requested targets.
+
+For the real target set in this project:
+- If the plan targets `launch__sm_count`, `device__attribute_max_gpu_frequency_khz`, or `sm__throughput.avg.pct_of_peak_sustained_elapsed`, prefer a compute-bound kernel with high arithmetic intensity and minimal DRAM pressure.
+- If the plan targets `dram__bytes_read.sum.per_second`, `dram__bytes_write.sum.per_second`, `device__attribute_max_mem_frequency_khz`, `device__attribute_fb_bus_width`, or `gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed`, prefer a memory-bound kernel with a large working set and clearly separated read/write behavior.
+- Avoid mixing many tiny kernels together; a single dominant kernel is easier for `ncu` to attribute.
+- If you output an estimated frequency, bandwidth, or any other derived metric, treat it as cross-validation evidence rather than as a replacement for the direct `ncu` targets.
+
+Implementation style:
+- Favor simple helper functions over complex template metaprogramming.
+- Use clear kernel names so the profiling rows are easy to read.
+- Add brief comments only where they help explain non-obvious measurement logic.
+- Ensure the program returns non-zero on CUDA failures and prints helpful stderr in that case.
