@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from .models import MetricEstimate, ProbeAttempt
@@ -23,21 +24,45 @@ class ResultParsingAndInferenceModule:
     def __init__(self, logger: ReasoningLogger):
         self.logger = logger
 
-    def infer(self, targets: list[str], attempts: list[ProbeAttempt]) -> list[MetricEstimate]:
-        estimates = [self._infer_one(target, attempts) for target in targets]
+    def infer(
+        self,
+        targets: list[str],
+        attempts: list[ProbeAttempt],
+        target_to_probe: dict[str, str] | None = None,
+    ) -> list[MetricEstimate]:
+        estimates = [
+            self._infer_one(
+                target,
+                attempts,
+                preferred_probe_family=(target_to_probe or {}).get(target),
+            )
+            for target in targets
+        ]
         self.logger.log("result_inference", "built_metric_estimates", estimates=estimates)
         return estimates
 
-    def _infer_one(self, target: str, attempts: list[ProbeAttempt]) -> MetricEstimate:
-        candidates: list[tuple[float, Any, str, ProbeAttempt]] = []
+    def _infer_one(
+        self,
+        target: str,
+        attempts: list[ProbeAttempt],
+        preferred_probe_family: str | None = None,
+    ) -> MetricEstimate:
+        preferred_candidates: list[tuple[float, Any, str, ProbeAttempt]] = []
+        fallback_candidates: list[tuple[float, Any, str, ProbeAttempt]] = []
         for attempt in attempts:
             validation_confidence = attempt.validation.confidence if attempt.validation else 0.0
+            destination = (
+                preferred_candidates
+                if preferred_probe_family is None or attempt.probe_family == preferred_probe_family
+                else fallback_candidates
+            )
 
-            if target in attempt.ncu_metrics:
-                candidates.append(
+            ncu_value = attempt.ncu_metrics.get(target)
+            if self._is_usable_candidate(ncu_value):
+                destination.append(
                     (
                         validation_confidence + 0.25,
-                        attempt.ncu_metrics[target],
+                        ncu_value,
                         f"ncu:{attempt.plan_id}:round{attempt.round_index}",
                         attempt,
                     )
@@ -45,16 +70,18 @@ class ResultParsingAndInferenceModule:
 
             derived = attempt.benchmark_output.get("derived_metrics", {})
             for alias in DERIVED_ALIASES.get(target, []):
-                if alias in derived:
-                    candidates.append(
+                derived_value = derived.get(alias)
+                if self._is_usable_candidate(derived_value):
+                    destination.append(
                         (
                             validation_confidence + 0.10,
-                            derived[alias],
+                            derived_value,
                             f"benchmark:{attempt.plan_id}:round{attempt.round_index}:{alias}",
                             attempt,
                         )
                     )
 
+        candidates = preferred_candidates or fallback_candidates
         if not candidates:
             return MetricEstimate(
                 target=target,
@@ -99,3 +126,13 @@ class ResultParsingAndInferenceModule:
         if source.startswith("ncu:"):
             return f"{target} 采用 {probe} 的 ncu 直接指标，最终选取数值 {value}。"
         return f"{target} 采用 {probe} 的 benchmark 派生指标，最终选取数值 {value}。"
+
+    @staticmethod
+    def _is_usable_candidate(value: Any) -> bool:
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, int):
+            return True
+        if isinstance(value, float):
+            return math.isfinite(value)
+        return False

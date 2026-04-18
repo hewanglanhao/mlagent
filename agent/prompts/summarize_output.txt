@@ -1,13 +1,18 @@
 Based on the information below, write a concise final inference summary in Chinese.
 
 Requirements:
+- The very first line must be a standalone conclusion sentence starting with `结论：`.
 - Start by stating what the targets are.
 - The real target set in this project is: `launch__sm_count`, `dram__bytes_read.sum.per_second`, `dram__bytes_write.sum.per_second`, `device__attribute_max_gpu_frequency_khz`, `device__attribute_max_mem_frequency_khz`, `device__attribute_fb_bus_width`, `sm__throughput.avg.pct_of_peak_sustained_elapsed`, and `gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed`.
+- The final `output.md` already contains a structured per-target section, so your job here is to produce the high-level conclusion and inference narrative rather than another table.
 - Explain which probes were used.
 - Explain how many rounds each probe ran.
 - Explain the initial results, which results were judged untrustworthy, and why.
 - Explain why the final values were accepted.
 - Clearly distinguish which metrics were taken directly from `ncu` and which were only benchmark-side cross-check evidence.
+- Explicitly mention cross-validation and repeated trials.
+- Explicitly state that the system did not rely on static specs, static lookup tables, or API attribute lookup as the main source of truth.
+- Explicitly describe the failed retries and the final repair or adjustment process.
 - Do not incorrectly describe `device__attribute_max_mem_frequency_khz` or `device__attribute_fb_bus_width` as directly measured by the benchmark unless the provided evidence explicitly supports that claim.
 - For `frequency_probe`, focus on whether it successfully created a compute-bound condition.
 - For `bandwidth_probe`, focus on whether it successfully created a memory-bound condition and whether read and write throughput were cleanly separated.
@@ -21,6 +26,15 @@ Targets:
 
 Metric analyses:
 {metric_analyses}
+
+Trial and cross-validation digest:
+{trial_and_cross_validation_digest}
+
+Retry and fix digest:
+{retry_and_fix_digest}
+
+Method commitments:
+{method_commitments}
 
 Trace digest:
 {trace_digest}

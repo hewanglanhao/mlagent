@@ -69,7 +69,7 @@ class GPUProbeAgent:
             print(f"[plan] {plan.plan_id} -> {plan.probe_family} ({', '.join(plan.targets)})")
             attempts.extend(self._execute_plan(plan))
 
-        estimates = self.result_inference.infer(spec.targets, attempts)
+        estimates = self.result_inference.infer(spec.targets, attempts, spec.target_to_probe)
         self._fill_unresolved_targets(estimates)
         output_path = self.output_writer.write(
             self.output_path,
