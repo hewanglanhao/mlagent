@@ -1,0 +1,4 @@
+export PATH=/usr/local/cuda/bin:$PATH
+export API_KEY="sk-ba00e9a32288bef1fbfc9e4b3b89483a9bfc2d0edeefcd20b15573aceec7316a"
+export BASE_MODEL="gpt-5.4"
+export BASE_URL="http://123.57.128.178:8080/v1"
