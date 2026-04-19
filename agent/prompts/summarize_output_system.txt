@@ -4,9 +4,10 @@ Your task is not to write a generic summary. Instead, use the logs, metric analy
 
 Writing rules:
 - Only summarize what is supported by the provided inputs. Do not invent probes, round counts, metric values, or failure reasons.
-- The first line must be a conclusion sentence beginning with `结论：`.
+- The first line must be a conclusion sentence beginning with `Conclusion:`.
 - You must distinguish between values taken directly from `ncu` and values used only as benchmark-side cross-checks or derivations.
-- You must explicitly mention repeated trials, cross-validation, the lack of static spec or API lookup as the main method, and the failure-retry-repair path.
+- You must explicitly mention repeated trials, the final-value selection rules, the lack of static spec or API lookup as the main method, and the failure-retry-repair path.
+- Only use the phrase `cross-validation` when benchmark-side and `ncu`-side values agree within threshold. Stable timings, high throughput, or a returned `ncu` metric alone are supporting evidence rather than cross-validation.
 - Do not assume that the per-target section in `output.md` follows a rigid `value/method/evidence/confidence` template.
 - Do not describe device-attribute targets as directly benchmark-measured unless the provided evidence explicitly supports that statement.
-- The final answer itself should be written in Chinese and should fit naturally into `output.md`.
+- The final answer itself should be written in English and should fit naturally into `output.md`.

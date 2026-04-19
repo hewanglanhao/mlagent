@@ -32,6 +32,7 @@ class OutputGenerationModule:
         estimates: list[MetricEstimate],
     ) -> Path:
         result_json = {estimate.target: estimate.value for estimate in estimates}
+        selection_rules = self._build_final_value_selection_rules()
         metric_cards = self._build_metric_cards(estimates, attempts)
         target_probe_digests = self._build_target_probe_digests(spec.targets, estimates, attempts)
         analysis_body = self._build_llm_per_target_findings(target_probe_digests, estimates, attempts)
@@ -42,6 +43,7 @@ class OutputGenerationModule:
         conclusion_sentence = self._build_conclusion_sentence(spec, estimates, attempts)
         llm_summary = self._build_llm_summary(
             spec=spec,
+            selection_rules=selection_rules,
             metric_cards=metric_cards,
             trial_digest=trial_digest,
             retry_digest=retry_digest,
@@ -57,6 +59,9 @@ class OutputGenerationModule:
         content = "\n".join(
             [
                 conclusion_line,
+                "",
+                "# Final Value Selection Rules",
+                selection_rules,
                 "",
                 "# Results",
                 "```json",
@@ -117,6 +122,7 @@ class OutputGenerationModule:
         self,
         *,
         spec: TargetSpec,
+        selection_rules: str,
         metric_cards: list[dict[str, str]],
         trial_digest: str,
         retry_digest: str,
@@ -128,6 +134,7 @@ class OutputGenerationModule:
         prompt_template = USER_PROMPT_FILE.read_text(encoding="utf-8")
         prompt = prompt_template.format(
             targets=json.dumps(spec.targets, ensure_ascii=False),
+            final_value_selection_rules=selection_rules,
             metric_analyses=json.dumps(metric_cards, ensure_ascii=False, indent=2),
             trial_and_cross_validation_digest=trial_digest,
             retry_and_fix_digest=retry_digest,
@@ -150,6 +157,7 @@ class OutputGenerationModule:
                 trial_digest=trial_digest,
                 retry_digest=retry_digest,
                 method_commitments=method_commitments,
+                selection_rules=selection_rules,
                 conclusion_sentence=conclusion_sentence,
                 error_text=str(exc),
             )
@@ -166,10 +174,15 @@ class OutputGenerationModule:
             "Plans:",
         ]
         for plan in plans:
-            lines.append(
+            plan_line = (
                 f"- {plan.plan_id}: {plan.probe_family}, target={plan.primary_target or ', '.join(plan.targets)}, "
                 f"variant={plan.probe_variant}, role={plan.plan_role}, max_rounds={plan.max_rounds}"
             )
+            if plan.skipped:
+                plan_line += ", skipped=True"
+            lines.append(plan_line)
+            if plan.skipped and plan.skip_reason:
+                lines.append(f"  skip_reason: {plan.skip_reason}")
 
         lines.append("Attempts:")
         for attempt in attempts:
@@ -189,6 +202,10 @@ class OutputGenerationModule:
                 lines.append(f"  issues: {' | '.join(validation.issues)}")
             if validation and validation.cross_checks:
                 lines.append(f"  cross_checks: {' | '.join(validation.cross_checks)}")
+            if validation and validation.supporting_evidence:
+                lines.append(
+                    f"  supporting_evidence: {' | '.join(validation.supporting_evidence)}"
+                )
             if attempt.generation_feedback:
                 lines.append(f"  retry_feedback: {OutputGenerationModule._summarize_feedback(attempt.generation_feedback)}")
         return "\n".join(lines)
@@ -219,7 +236,9 @@ class OutputGenerationModule:
             "- Do not claim that the benchmark directly measured `launch__sm_count`, `device__attribute_max_gpu_frequency_khz`, `device__attribute_max_mem_frequency_khz`, or `device__attribute_fb_bus_width` unless the evidence explicitly shows a benchmark-side derivation.",
             "- The purpose of `frequency_probe` is to create a compute-bound condition so the `ncu` values for `launch__sm_count`, `device__attribute_max_gpu_frequency_khz`, and `sm__throughput.avg.pct_of_peak_sustained_elapsed` are credible.",
             "- The purpose of `bandwidth_probe` is to create a memory-bound condition so the `ncu` values for `dram__bytes_read.sum.per_second`, `dram__bytes_write.sum.per_second`, `device__attribute_max_mem_frequency_khz`, `device__attribute_fb_bus_width`, and `gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed` are credible.",
-            "- If a final metric value mainly comes from `ncu`, say explicitly that it was taken directly from `ncu`. If it only comes from benchmark cross-checking, describe it as cross-validation evidence.",
+            "- Final-value selection must follow the predeclared rule order: prefer the target's own accepted round, and only fall back to shared probes when the target's own accepted rounds did not resolve the metric.",
+            "- Only call something `cross-validation` when benchmark-side and `ncu`-side measurements agree within the configured threshold. Stable timings, high throughput, or a returned `ncu` metric are supporting evidence, not cross-validation by themselves.",
+            "- If a final metric value mainly comes from `ncu`, say explicitly that it was taken directly from `ncu`. If it only comes from benchmark cross-checking, describe it as cross-validation evidence. If benchmark and `ncu` disagree materially, call it a mismatch or failed consistency check instead.",
             "- When a round is rejected as untrustworthy, prefer explanations such as kernel too short, working set too small, compute or memory not saturated, read and write interference, or high timing variance.",
             "Target list for this run:",
         ]
@@ -242,6 +261,7 @@ class OutputGenerationModule:
                 {
                     "target": estimate.target,
                     "value": self._render_value(estimate.value),
+                    "selection_rule": estimate.selection_rule,
                     "method": method,
                     "evidence": evidence,
                     "confidence": f"{estimate.confidence:.2f}",
@@ -285,6 +305,7 @@ class OutputGenerationModule:
                     "final_value": self._render_value(estimate.value),
                     "final_confidence": f"{estimate.confidence:.2f}",
                     "final_source": estimate.source,
+                    "final_selection_rule": estimate.selection_rule,
                     "final_reasoning": estimate.reasoning,
                     "selected_source_kind": selected_source_kind,
                     "selected_alias": selected_alias,
@@ -338,6 +359,9 @@ class OutputGenerationModule:
                     ),
                     "issues": attempt.validation.issues if attempt.validation else [],
                     "cross_checks": attempt.validation.cross_checks if attempt.validation else [],
+                    "supporting_evidence": (
+                        attempt.validation.supporting_evidence if attempt.validation else []
+                    ),
                     "timing_trials": (
                         len(attempt.benchmark_output.get("timings_ms", []))
                         if isinstance(attempt.benchmark_output.get("timings_ms", []), list)
@@ -436,7 +460,8 @@ class OutputGenerationModule:
                 f"Used the direct `ncu` metric from `{attempt.probe_family}` variant `{attempt.probe_variant}` "
                 f"({attempt.plan_role}) in round {attempt.round_index} after {total_rounds} total round(s) for this plan; "
                 f"the benchmark created the profiling condition "
-                f"and collected {timings_count} timing sample(s) for cross-validation."
+                f"and collected {timings_count} timing sample(s) for repeatability/supporting evidence. "
+                f"{estimate.selection_rule}"
             )
         if source_kind == "benchmark":
             alias_text = f" derived metric `{alias}`" if alias else " derived benchmark metric"
@@ -444,7 +469,8 @@ class OutputGenerationModule:
                 f"Used the benchmark{alias_text} from `{attempt.probe_family}` variant `{attempt.probe_variant}` "
                 f"({attempt.plan_role}) in round {attempt.round_index} after {total_rounds} total round(s); "
                 f"the value was kept only after repeated timings "
-                f"and `ncu` cross-checking where available."
+                f"and `ncu` cross-checking where the agreement threshold was satisfied. "
+                f"{estimate.selection_rule}"
             )
         return estimate.reasoning
 
@@ -496,6 +522,7 @@ class OutputGenerationModule:
         return (
             f"- `{estimate.target}`: {origin} after {total_rounds} round(s) for this plan."
             f"{timing_clause} Confidence is `{estimate.confidence:.2f}`. "
+            f"Selection rule: {estimate.selection_rule} "
             f"Supporting evidence includes: {evidence}"
         )
 
@@ -515,8 +542,16 @@ class OutputGenerationModule:
         if attempt.validation and attempt.validation.cross_checks:
             evidence_items.extend(
                 [
-                    f"cross-validation: {item}"
+                    f"cross-validation passed: {item}"
                     for item in attempt.validation.cross_checks[:2]
+                ]
+            )
+
+        if attempt.validation and attempt.validation.supporting_evidence:
+            evidence_items.extend(
+                [
+                    f"supporting evidence: {item}"
+                    for item in attempt.validation.supporting_evidence[:2]
                 ]
             )
 
@@ -538,7 +573,14 @@ class OutputGenerationModule:
         for plan in plans:
             plan_attempts = [attempt for attempt in attempts if attempt.plan_id == plan.plan_id]
             if not plan_attempts:
-                lines.append(f"- `{plan.plan_id}` / `{plan.probe_family}`: no attempts were executed.")
+                if plan.skipped:
+                    lines.append(
+                        f"- `{plan.plan_id}` / `{plan.probe_family}` / target=`{plan.primary_target or ', '.join(plan.targets)}` / "
+                        f"variant=`{plan.probe_variant}` / role=`{plan.plan_role}` skipped before execution by early-stop. "
+                        f"Reason: {plan.skip_reason or 'no skip reason recorded'}."
+                    )
+                else:
+                    lines.append(f"- `{plan.plan_id}` / `{plan.probe_family}`: no attempts were executed.")
                 continue
 
             accepted = next(
@@ -556,8 +598,10 @@ class OutputGenerationModule:
                 if isinstance(timings, list):
                     timings_count = len(timings)
             cross_checks: list[str] = []
+            supporting_evidence: list[str] = []
             if accepted and accepted.validation:
                 cross_checks = accepted.validation.cross_checks[:2]
+                supporting_evidence = accepted.validation.supporting_evidence[:2]
 
             line = (
                 f"- `{plan.plan_id}` / `{plan.probe_family}` / target=`{plan.primary_target or ', '.join(plan.targets)}` / "
@@ -568,8 +612,10 @@ class OutputGenerationModule:
             )
             if cross_checks:
                 line += " Cross-validation: " + " | ".join(cross_checks) + "."
+            elif supporting_evidence:
+                line += " Supporting evidence: " + " | ".join(supporting_evidence) + "."
             else:
-                line += " Cross-validation: no accepted cross-check notes were recorded."
+                line += " Cross-validation: no accepted benchmark-vs-ncu agreement was recorded."
             lines.append(line)
         return "\n".join(lines)
 
@@ -582,7 +628,14 @@ class OutputGenerationModule:
         for plan in plans:
             plan_attempts = [attempt for attempt in attempts if attempt.plan_id == plan.plan_id]
             if not plan_attempts:
-                lines.append(f"- `{plan.plan_id}` / `{plan.probe_family}`: no retry or fix history because no attempt was run.")
+                if plan.skipped:
+                    lines.append(
+                        f"- `{plan.plan_id}` / `{plan.probe_family}` / target=`{plan.primary_target or ', '.join(plan.targets)}` / "
+                        f"variant=`{plan.probe_variant}` / role=`{plan.plan_role}`: no retry or fix history because this plan was skipped by early-stop. "
+                        f"Reason: {plan.skip_reason or 'no skip reason recorded'}."
+                    )
+                else:
+                    lines.append(f"- `{plan.plan_id}` / `{plan.probe_family}`: no retry or fix history because no attempt was run.")
                 continue
 
             round_notes: list[str] = []
@@ -626,7 +679,8 @@ class OutputGenerationModule:
             [
                 "- The agent did not rely on static spec sheets, online lookup tables, or API-based attribute queries as the primary source of truth.",
                 "- Prompt constraints explicitly forbid using `cudaGetDeviceProperties`, `cudaDeviceGetAttribute`, `nvidia-smi`, or similar static/device-query shortcuts as the main measurement method.",
-                "- Final values are expected to come from repeated benchmark trials plus `ncu` profiling, with benchmark-derived numbers used as cross-validation evidence when applicable.",
+                "- Final values follow a predeclared rule order: prefer the target's own accepted round first, and only fall back to shared probes if the target's own accepted rounds do not resolve the metric.",
+                "- Benchmark-derived numbers are only called cross-validation evidence when benchmark-side and `ncu`-side values agree within threshold; otherwise they are treated as mismatch diagnostics or supporting context only.",
             ]
         )
 
@@ -643,9 +697,9 @@ class OutputGenerationModule:
             if attempt.validation and attempt.validation.credible
         )
         return (
-            f"结论：本次针对 {len(spec.targets)} 个 target 进行了多轮 probe 实验，"
-            f"当前解析出 {resolved_count} 个非空结果，最终结论基于 {accepted_attempts} 个通过交叉验证的有效 round，"
-            "并明确未依赖静态规格表或 API 查表。"
+            f"Conclusion: this run executed multiple probe rounds for {len(spec.targets)} targets, "
+            f"resolved {resolved_count} non-null results, and based the final report on {accepted_attempts} validated rounds "
+            "without relying on static spec sheets or API lookup as the primary source of truth."
         )
 
     @staticmethod
@@ -653,7 +707,7 @@ class OutputGenerationModule:
         lines = [line.strip() for line in summary.splitlines() if line.strip()]
         if not lines:
             return fallback_conclusion, fallback_conclusion
-        if lines[0].startswith("结论："):
+        if lines[0].startswith("Conclusion:"):
             body = "\n".join(lines[1:]).strip()
             return lines[0], body or lines[0]
         return fallback_conclusion, summary.strip()
@@ -666,6 +720,7 @@ class OutputGenerationModule:
         trial_digest: str,
         retry_digest: str,
         method_commitments: str,
+        selection_rules: str,
         conclusion_sentence: str,
         error_text: str,
     ) -> str:
@@ -676,17 +731,32 @@ class OutputGenerationModule:
         return "\n".join(
             [
                 conclusion_sentence,
+                "The final-value selection rules are:",
+                selection_rules,
                 (
-                    "本次输出的逐项 target 结果已经在 Per-Target Findings 中逐项解读；"
-                    f"其中代表性结果包括 {top_metrics if top_metrics else 'no resolved metrics'}。"
+                    "The per-target outcomes are already documented in the `Per-Target Findings` section; "
+                    f"representative resolved metrics include {top_metrics if top_metrics else 'no resolved metrics'}."
                 ),
-                "交叉验证与多次试验情况如下：",
+                "Repeated-trial and cross-validation details:",
                 trial_digest,
-                "失败重试与最终修复过程如下：",
+                "Failure, retry, and repair history:",
                 retry_digest,
-                "方法约束如下：",
+                "Method commitments:",
                 method_commitments,
                 f"LLM summary generation failed, so this fallback summary was used. Error: {error_text}",
+            ]
+        )
+
+    @staticmethod
+    def _build_final_value_selection_rules() -> str:
+        return "\n".join(
+            [
+                "1. Prefer the target's own accepted direct `ncu` measurement.",
+                "2. If that is unavailable, use the target's own accepted benchmark-derived value.",
+                "3. If the target's own accepted rounds do not resolve the metric, fall back to an accepted shared probe from the same probe family.",
+                "4. Only if no accepted same-family evidence resolves the metric may the system use lower-confidence or cross-family fallback evidence, and the report must say so explicitly.",
+                "5. Within the same rule tier, prefer `primary` over `cross_check`, then prefer higher validation confidence and later repaired rounds.",
+                "6. `Cross-validation` means benchmark-side and `ncu`-side values agree within threshold; stable timing, high throughput, or returned `ncu` metrics alone are only supporting evidence.",
             ]
         )
 

@@ -25,7 +25,7 @@ class ExperimentDecisionAndFeedbackModule:
         ]
 
         joined_issues = " ".join(validation.issues)
-        if "波动" in joined_issues:
+        if "variance" in joined_issues.lower():
             suggestions.append("Increase the number of repeated measurements and lengthen each measurement window.")
         if plan.probe_family == "bandwidth_probe":
             suggestions.append("Increase the DRAM working set and ensure the access pattern is fully coalesced.")

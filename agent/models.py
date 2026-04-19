@@ -31,6 +31,8 @@ class BenchmarkPlan:
     profile_timeout_s: int = 300
     profile_launch_count: int = 1
     profile_env: dict[str, str] = field(default_factory=dict)
+    skipped: bool = False
+    skip_reason: str = ""
 
     def to_prompt_context(self) -> dict[str, Any]:
         return {
@@ -51,6 +53,8 @@ class BenchmarkPlan:
             "profile_timeout_s": self.profile_timeout_s,
             "profile_launch_count": self.profile_launch_count,
             "profile_env": self.profile_env,
+            "skipped": self.skipped,
+            "skip_reason": self.skip_reason,
         }
 
 
@@ -75,6 +79,7 @@ class ValidationResult:
     confidence: float
     issues: list[str] = field(default_factory=list)
     cross_checks: list[str] = field(default_factory=list)
+    supporting_evidence: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -107,4 +112,5 @@ class MetricEstimate:
     confidence: float
     source: str
     reasoning: str
+    selection_rule: str = ""
     evidence: list[str] = field(default_factory=list)

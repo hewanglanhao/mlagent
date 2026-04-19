@@ -4,7 +4,7 @@ Your job is to write the `Per-Target Findings` section for `output.md`.
 
 Writing rules:
 - Use only the provided target-level probe digests. Do not invent probes, rounds, values, or failure reasons.
-- Write in Chinese.
+- Write in English.
 - Do not force a rigid `value/method/evidence/confidence` template.
 - For each target, summarize:
   - which `primary` and `cross_check` probes ran,

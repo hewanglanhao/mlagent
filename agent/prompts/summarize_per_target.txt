@@ -7,8 +7,11 @@ Requirements:
   - accepted and what it observed,
   - or rejected/failed and why.
 - Explain why the final chosen value was selected.
+- State which predefined selection rule was used for the final value.
+- If the final chosen value came from a shared probe instead of the target's own accepted round, say that explicitly and explain why the fallback rule was triggered.
 - If the final chosen value came directly from `ncu`, say that explicitly.
 - If benchmark-derived values were used only as cross-check evidence, say that explicitly.
+- Use the phrase `cross-validation` only when benchmark-side and `ncu`-side values agree within threshold. Otherwise describe the information as supporting evidence or mismatch diagnostics.
 - Do not force a rigid field template.
 - Use readable markdown suitable for placing directly under the `# Per-Target Findings` header.
 
