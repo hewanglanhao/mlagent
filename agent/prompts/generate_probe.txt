@@ -30,6 +30,7 @@ Hard requirements:
 - The program must actually measure the target behavior with kernels and timing logic.
 - Because the real targets are mostly direct `ncu` metrics, the benchmark should focus on creating a trustworthy profiling condition and exporting cross-check measurements in JSON.
 - The final stdout must end with exactly one valid JSON object.
+- Keep benchmark mode reasonably short as well, not just profiling mode: avoid oversized warmup/repeat/sweep combinations that make a single plan take tens of seconds unless the plan explicitly requires that cost.
 - The program must support a lightweight profiling mode controlled by environment variables. When `MLAGENT_PROFILE_MODE=1` is set, keep the same dominant kernel semantics but aggressively reduce total profiling work.
 - In profiling mode, read and honor these optional environment variables when present:
   - `MLAGENT_PROFILE_SCALE`: multiply loop trip counts, inner repeats, or similar work controls by this factor.
@@ -39,6 +40,7 @@ Hard requirements:
   - `MLAGENT_PROFILE_TARGET_KERNEL_MS`: try to keep the dominant profiled kernel roughly near this duration in milliseconds.
 - In profiling mode, prefer one warmup and one to two measured repeats, and avoid replaying a large sweep if one or two representative points are enough for `ncu`.
 - Design the program so `ncu` can finish quickly: avoid extremely long dominant kernels in profiling mode, and target approximately 200-1500 ms for the main profiled launch unless the plan-specific budget explicitly asks for more.
+- Unless the plan explicitly requires a broader sweep, keep the total number of benchmark timing samples modest and favor a compact benchmark over exhaustive exploration.
 - The JSON object must contain:
   - `probe_family`: string
   - `kernel_name`: string

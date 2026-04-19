@@ -127,13 +127,16 @@ class MicroBenchmarkGenerationModule:
             ),
             (
                 "- This is the main target-specific probe for the metric. Prioritize making this one clean, auditable, "
-                "and directly useful for the target value."
+                "and directly useful for the target value. Keep benchmark-mode runtime reasonably compact: "
+                "target roughly 4-8 total timing samples and approximately <=8 seconds of total measured benchmark time on a modern datacenter GPU unless the plan absolutely needs more."
                 if plan.plan_role == "primary"
                 else "- This is a supporting cross-check probe. It should stress the same target from a nearby angle, "
-                "produce extra evidence, and help confirm or reject the primary probe."
+                "produce extra evidence, and help confirm or reject the primary probe. Keep it materially lighter than the primary: "
+                "target roughly 2-4 total timing samples, at most one or two representative sweep points, and approximately <=4 seconds of total measured benchmark time on a modern datacenter GPU."
             ),
             *family_guidance.get(plan.probe_family, []),
             "- In profiling mode, keep the dominant kernel much shorter than the benchmark mode and avoid replaying the full sweep or all repeated trials.",
+            "- Avoid large warmup/repeat products or wide sweep grids unless they are strictly required to resolve the target.",
         ]
         for target in plan.targets:
             guidance = target_guidance.get(target)
