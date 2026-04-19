@@ -99,19 +99,29 @@ class CompilationAndExecutionModule:
             )
         except subprocess.TimeoutExpired as exc:
             duration_s = time.perf_counter() - start
+            stdout_text = _coerce_text(exc.stdout)
+            stderr_text = _coerce_text(exc.stderr)
             return CommandResult(
                 command=command,
                 returncode=124,
-                stdout=exc.stdout or "",
-                stderr=(exc.stderr or "") + f"\nCommand timed out after {timeout_s} seconds.",
+                stdout=stdout_text,
+                stderr=stderr_text + f"\nCommand timed out after {timeout_s} seconds.",
                 duration_s=duration_s,
             )
 
     def _persist_result(self, result: CommandResult, stem: str) -> CommandResult:
         stdout_path = self.log_dir / f"{stem}.stdout.txt"
         stderr_path = self.log_dir / f"{stem}.stderr.txt"
-        stdout_path.write_text(result.stdout or "", encoding="utf-8")
-        stderr_path.write_text(result.stderr or "", encoding="utf-8")
+        stdout_path.write_text(_coerce_text(result.stdout), encoding="utf-8")
+        stderr_path.write_text(_coerce_text(result.stderr), encoding="utf-8")
         result.stdout_path = str(stdout_path)
         result.stderr_path = str(stderr_path)
         return result
+
+
+def _coerce_text(data: str | bytes | None) -> str:
+    if data is None:
+        return ""
+    if isinstance(data, bytes):
+        return data.decode("utf-8", errors="replace")
+    return data

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import time
@@ -22,6 +23,11 @@ class NCUProfilingModule:
         round_index: int,
         metrics: list[str],
         program_args: list[str],
+        timeout_s: int = 300,
+        env_overrides: dict[str, str] | None = None,
+        kernel_name_filter: str = "",
+        launch_count: int = 0,
+        launch_skip: int = 0,
     ) -> CommandResult:
         ncu = shutil.which("ncu")
         if ncu is None:
@@ -44,9 +50,21 @@ class NCUProfilingModule:
             "--csv",
             "--metrics",
             ",".join(metrics),
+        ]
+        if kernel_name_filter:
+            command.extend(["--kernel-name-base", "demangled", "-k", f"regex:{kernel_name_filter}"])
+        if launch_skip > 0:
+            command.extend(["-s", str(launch_skip)])
+        if launch_count > 0:
+            command.extend(["-c", str(launch_count), "--kill", "1"])
+        command.extend(
+            [
             str(binary_path),
             *program_args,
-        ]
+            ]
+        )
+        env = os.environ.copy()
+        env.update(env_overrides or {})
 
         start = time.perf_counter()
         try:
@@ -55,7 +73,8 @@ class NCUProfilingModule:
                 text=True,
                 capture_output=True,
                 check=False,
-                timeout=300,
+                timeout=timeout_s,
+                env=env,
             )
             duration_s = time.perf_counter() - start
             result = CommandResult(
@@ -67,11 +86,13 @@ class NCUProfilingModule:
             )
         except subprocess.TimeoutExpired as exc:
             duration_s = time.perf_counter() - start
+            stdout_text = _coerce_text(exc.stdout)
+            stderr_text = _coerce_text(exc.stderr)
             result = CommandResult(
                 command=command,
                 returncode=124,
-                stdout=exc.stdout or "",
-                stderr=(exc.stderr or "") + "\nNCU profiling timed out after 300 seconds.",
+                stdout=stdout_text,
+                stderr=stderr_text + f"\nNCU profiling timed out after {timeout_s} seconds.",
                 duration_s=duration_s,
             )
 
@@ -82,6 +103,11 @@ class NCUProfilingModule:
             plan_id=plan_id,
             round_index=round_index,
             command=command,
+            timeout_s=timeout_s,
+            env_overrides=env_overrides or {},
+            kernel_name_filter=kernel_name_filter,
+            launch_count=launch_count,
+            launch_skip=launch_skip,
             returncode=persisted.returncode,
         )
         return persisted
@@ -89,8 +115,16 @@ class NCUProfilingModule:
     def _persist_result(self, result: CommandResult, stem: str) -> CommandResult:
         stdout_path = self.log_dir / f"{stem}.stdout.txt"
         stderr_path = self.log_dir / f"{stem}.stderr.txt"
-        stdout_path.write_text(result.stdout or "", encoding="utf-8")
-        stderr_path.write_text(result.stderr or "", encoding="utf-8")
+        stdout_path.write_text(_coerce_text(result.stdout), encoding="utf-8")
+        stderr_path.write_text(_coerce_text(result.stderr), encoding="utf-8")
         result.stdout_path = str(stdout_path)
         result.stderr_path = str(stderr_path)
         return result
+
+
+def _coerce_text(data: str | bytes | None) -> str:
+    if data is None:
+        return ""
+    if isinstance(data, bytes):
+        return data.decode("utf-8", errors="replace")
+    return data

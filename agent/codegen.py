@@ -116,6 +116,15 @@ class MicroBenchmarkGenerationModule:
             f"- Primary target: `{plan.primary_target or ', '.join(plan.targets)}`.",
             f"- Probe variant: `{plan.probe_variant}`.",
             f"- Plan role: `{plan.plan_role}`.",
+            f"- `ncu` timeout budget for this plan: {plan.profile_timeout_s} seconds.",
+            f"- `ncu` should collect at most {plan.profile_launch_count} matching launch(es) before the target process is terminated.",
+            (
+                "- The generated program must honor these profiling environment overrides when they are present: "
+                + ", ".join(f"`{key}={value}`" for key, value in sorted(plan.profile_env.items()))
+                + "."
+                if plan.profile_env
+                else "- The generated program should still support a lightweight profiling mode even if no explicit profile environment overrides are provided."
+            ),
             (
                 "- This is the main target-specific probe for the metric. Prioritize making this one clean, auditable, "
                 "and directly useful for the target value."
@@ -124,6 +133,7 @@ class MicroBenchmarkGenerationModule:
                 "produce extra evidence, and help confirm or reject the primary probe."
             ),
             *family_guidance.get(plan.probe_family, []),
+            "- In profiling mode, keep the dominant kernel much shorter than the benchmark mode and avoid replaying the full sweep or all repeated trials.",
         ]
         for target in plan.targets:
             guidance = target_guidance.get(target)

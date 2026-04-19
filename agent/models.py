@@ -28,6 +28,9 @@ class BenchmarkPlan:
     max_rounds: int = 3
     tags: list[str] = field(default_factory=list)
     program_args: list[str] = field(default_factory=list)
+    profile_timeout_s: int = 300
+    profile_launch_count: int = 1
+    profile_env: dict[str, str] = field(default_factory=dict)
 
     def to_prompt_context(self) -> dict[str, Any]:
         return {
@@ -45,6 +48,9 @@ class BenchmarkPlan:
             "max_rounds": self.max_rounds,
             "tags": self.tags,
             "program_args": self.program_args,
+            "profile_timeout_s": self.profile_timeout_s,
+            "profile_launch_count": self.profile_launch_count,
+            "profile_env": self.profile_env,
         }
 
 

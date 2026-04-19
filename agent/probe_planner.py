@@ -228,6 +228,9 @@ class TargetProbePlanningModule:
             + ([target] if "__" in target else [])
         )
         max_rounds = int(variant.get("max_rounds", blueprint["max_rounds"]))
+        profile_env = self._profile_env_for(probe_family, role, variant_name)
+        profile_timeout_s = self._profile_timeout_for(probe_family, role)
+        profile_launch_count = self._profile_launch_count_for(probe_family)
 
         target_slug = _slugify(target)
         variant_slug = _slugify(variant_name)
@@ -247,7 +250,55 @@ class TargetProbePlanningModule:
             plan_role=role,
             max_rounds=max_rounds,
             tags=[probe_family, target, variant_name, role],
+            profile_timeout_s=profile_timeout_s,
+            profile_launch_count=profile_launch_count,
+            profile_env=profile_env,
         )
+
+    @staticmethod
+    def _profile_env_for(probe_family: str, plan_role: str, probe_variant: str) -> dict[str, str]:
+        del probe_variant
+        family_scale = {
+            "frequency_probe": "0.0625",
+            "bandwidth_probe": "0.125",
+            "latency_probe": "0.25",
+            "bank_conflict_probe": "0.25",
+            "cache_capacity_probe": "0.25",
+            "exploratory_probe": "0.25",
+        }.get(probe_family, "0.25")
+        target_kernel_ms = {
+            "frequency_probe": "400",
+            "bandwidth_probe": "500",
+            "latency_probe": "250",
+            "bank_conflict_probe": "250",
+            "cache_capacity_probe": "300",
+            "exploratory_probe": "300",
+        }.get(probe_family, "300")
+        sweep_limit = "2" if plan_role == "cross_check" else "3"
+        return {
+            "MLAGENT_PROFILE_MODE": "1",
+            "MLAGENT_PROFILE_SCALE": family_scale,
+            "MLAGENT_PROFILE_MAX_WARMUP": "1",
+            "MLAGENT_PROFILE_MAX_REPEATS": "2",
+            "MLAGENT_PROFILE_SWEEP_LIMIT": sweep_limit,
+            "MLAGENT_PROFILE_TARGET_KERNEL_MS": target_kernel_ms,
+        }
+
+    @staticmethod
+    def _profile_timeout_for(probe_family: str, plan_role: str) -> int:
+        if probe_family in {"frequency_probe", "bandwidth_probe"} and plan_role == "cross_check":
+            return 480
+        if probe_family in {"frequency_probe", "bandwidth_probe"}:
+            return 420
+        return 300
+
+    @staticmethod
+    def _profile_launch_count_for(probe_family: str) -> int:
+        if probe_family == "bandwidth_probe":
+            return 4
+        if probe_family == "frequency_probe":
+            return 2
+        return 1
 
     def _variants_for_target(self, target: str, probe_family: str) -> list[dict[str, object]]:
         target_variants = {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -144,12 +145,32 @@ class GPUProbeAgent:
                 continue
 
             print(f"  [round {round_index}] profiling with ncu")
+            kernel_name_filter = self._build_profile_kernel_filter(
+                attempt.benchmark_output.get("kernel_name")
+            )
+            launch_skip = self._derive_profile_launch_skip(plan, attempt.benchmark_output)
+            self.logger.log(
+                "ncu_profiler",
+                "resolved_profile_controls",
+                plan_id=plan.plan_id,
+                round_index=round_index,
+                kernel_name_filter=kernel_name_filter,
+                launch_skip=launch_skip,
+                launch_count=plan.profile_launch_count,
+                profile_env=plan.profile_env,
+                profile_timeout_s=plan.profile_timeout_s,
+            )
             profile_result = self.profiler.profile(
                 binary_path=binary_path,
                 plan_id=plan.plan_id,
                 round_index=round_index,
                 metrics=plan.ncu_metrics,
                 program_args=plan.program_args,
+                timeout_s=plan.profile_timeout_s,
+                env_overrides=plan.profile_env,
+                kernel_name_filter=kernel_name_filter,
+                launch_count=plan.profile_launch_count,
+                launch_skip=launch_skip,
             )
             attempt.profile_result = profile_result
             if profile_result.ok:
@@ -178,6 +199,69 @@ class GPUProbeAgent:
         for estimate in estimates:
             if estimate.value is None:
                 estimate.reasoning += " 当前输出保留为 null，方便后续人工检查。"
+
+    @staticmethod
+    def _build_profile_kernel_filter(kernel_name_hint: object) -> str:
+        if not isinstance(kernel_name_hint, str):
+            return ""
+        tokens = []
+        for raw_token in kernel_name_hint.split("|"):
+            token = raw_token.strip()
+            if not token:
+                continue
+            token = token.split("(", 1)[0].strip()
+            if token:
+                tokens.append(re.escape(token))
+        if not tokens:
+            return ""
+        if len(tokens) == 1:
+            return f".*{tokens[0]}.*"
+        return f".*({'|'.join(tokens)}).*"
+
+    @staticmethod
+    def _derive_profile_launch_skip(plan, benchmark_output: dict[str, object]) -> int:
+        if not isinstance(benchmark_output, dict):
+            return 0
+        parameters = benchmark_output.get("parameters", {})
+        if not isinstance(parameters, dict):
+            return 0
+        if "MLAGENT_PROFILE_MAX_WARMUP" in plan.profile_env:
+            warmup = GPUProbeAgent._coerce_nonnegative_int(
+                plan.profile_env.get("MLAGENT_PROFILE_MAX_WARMUP")
+            )
+        else:
+            warmup = GPUProbeAgent._coerce_nonnegative_int(
+                parameters.get("warmup")
+                or parameters.get("warmup_iters")
+                or parameters.get("warmups")
+            )
+        if warmup <= 0:
+            return 0
+        kernel_name_hint = benchmark_output.get("kernel_name")
+        kernels_per_iteration = 1
+        if isinstance(kernel_name_hint, str):
+            kernels_per_iteration = max(
+                1,
+                len([part for part in kernel_name_hint.split("|") if part.strip()]),
+            )
+        if plan.probe_family == "bandwidth_probe":
+            kernels_per_iteration = max(2, kernels_per_iteration)
+        return warmup * kernels_per_iteration
+
+    @staticmethod
+    def _coerce_nonnegative_int(value: object) -> int:
+        if isinstance(value, bool):
+            return 0
+        if isinstance(value, int):
+            return max(0, value)
+        if isinstance(value, float):
+            return max(0, int(value))
+        if isinstance(value, str):
+            try:
+                return max(0, int(float(value)))
+            except ValueError:
+                return 0
+        return 0
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

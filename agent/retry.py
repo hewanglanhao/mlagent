@@ -45,8 +45,10 @@ class ErrorHandlingAndRetryModule:
                 "end with exactly one parseable JSON object that includes timings_ms and derived_metrics."
             ),
             "profile": (
-                "The benchmark ran but ncu profiling failed. Keep the kernel simple, long-running, and deterministic "
-                "so ncu can capture it. Avoid extremely short kernels."
+                "The benchmark ran but ncu profiling failed. Keep the kernel simple, deterministic, and friendly to "
+                "profiling. Support a lightweight profiling mode that reduces warmup, repeats, sweep breadth, and "
+                "loop trip counts when `MLAGENT_PROFILE_MODE=1`, so ncu does not time out while still observing the "
+                "same dominant kernel behavior."
             ),
         }.get(
             stage,

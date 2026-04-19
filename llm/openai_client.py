@@ -11,6 +11,7 @@ def _clean_env(name: str, default: str = "") -> str:
 
 DEFAULT_MODEL = _clean_env("BASE_MODEL", "gpt-5.4")
 DEFAULT_REASONING_EFFORT = _clean_env("OPENAI_REASONING_EFFORT", "medium")
+DEFAULT_PRIMARY_API = _clean_env("OPENAI_PRIMARY_API", "chat.completions").lower()
 
 client = OpenAI(
     api_key=_clean_env("API_KEY", ""),
@@ -54,55 +55,61 @@ class GPTClient:
         error_messages: list[str] = []
         last_error: Exception | None = None
 
-        try:
-            response = self._client.responses.create(
-                model=selected_model,
-                instructions=system_prompt,
-                input=user_prompt,
-                max_output_tokens=max_output_tokens,
-                reasoning={"effort": selected_effort},
-            )
-            text = self._extract_responses_text(response)
-            if text:
-                if self._looks_like_html(text):
-                    error_messages.append(self._html_response_hint())
-                else:
-                    return LLMResponse(text=text, api_mode="responses")
-            error_messages.append(
-                f"Responses API returned an empty payload of type {type(response).__name__}."
-            )
-        except Exception as exc:
-            last_error = exc
-            error_messages.append(f"Responses API failed: {exc}")
+        for api_mode in self._api_order():
+            try:
+                if api_mode == "chat.completions":
+                    response = self._client.chat.completions.create(
+                        model=selected_model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                    )
+                    text = self._extract_chat_text(response)
+                    if text:
+                        if self._looks_like_html(text):
+                            error_messages.append(self._html_response_hint())
+                        else:
+                            return LLMResponse(text=text, api_mode="chat.completions")
+                    error_messages.append(
+                        f"Chat Completions API returned an empty payload of type {type(response).__name__}."
+                    )
+                    continue
 
-        try:
-            response = self._client.chat.completions.create(
-                model=selected_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            )
-            text = self._extract_chat_text(response)
-            if text:
-                if self._looks_like_html(text):
-                    error_messages.append(self._html_response_hint())
+                response = self._client.responses.create(
+                    model=selected_model,
+                    instructions=system_prompt,
+                    input=user_prompt,
+                    max_output_tokens=max_output_tokens,
+                    reasoning={"effort": selected_effort},
+                )
+                text = self._extract_responses_text(response)
+                if text:
+                    if self._looks_like_html(text):
+                        error_messages.append(self._html_response_hint())
+                    else:
+                        return LLMResponse(text=text, api_mode="responses")
+                error_messages.append(
+                    f"Responses API returned an empty payload of type {type(response).__name__}."
+                )
+            except Exception as exc:
+                last_error = exc
+                if api_mode == "chat.completions":
+                    error_messages.append(f"Chat Completions API failed: {exc}")
                 else:
-                    return LLMResponse(text=text, api_mode="chat.completions")
-            error_messages.append(
-                f"Chat Completions API returned an empty payload of type {type(response).__name__}."
-            )
-        except Exception as exc:
-            error_messages.append(f"Chat Completions API failed: {exc}")
-            raise RuntimeError(
-                "Both Responses API and Chat Completions API failed while calling the model. "
-                + " ".join(error_messages)
-            ) from exc
+                    error_messages.append(f"Responses API failed: {exc}")
 
         raise RuntimeError(
-            "The OpenAI-compatible endpoint returned an empty response. "
+            "Both Chat Completions API and Responses API failed while calling the model. "
             + " ".join(error_messages)
         ) from last_error
+
+    @staticmethod
+    def _api_order() -> list[str]:
+        primary = _clean_env("OPENAI_PRIMARY_API", DEFAULT_PRIMARY_API).lower()
+        if primary == "responses":
+            return ["responses", "chat.completions"]
+        return ["chat.completions", "responses"]
 
     @staticmethod
     def _extract_responses_text(response: Any) -> str:

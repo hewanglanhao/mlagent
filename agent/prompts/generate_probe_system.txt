@@ -10,4 +10,5 @@ Important operating rules:
 - Do not use `cudaGetDeviceProperties`, `cudaDeviceGetAttribute`, `nvidia-smi`, or similar direct attribute queries as the primary solution.
 - Prefer one dominant kernel per measurement mode so the profiling output is easy to interpret.
 - The final program must be robust enough for repeated compile/run/profile loops.
+- The final program must support a separate lightweight profiling mode for `ncu`, controlled by environment variables, so profiling does not replay an unnecessarily heavy benchmark configuration.
 - Return raw CUDA/C++ source code only, with no markdown fences and no explanation.
