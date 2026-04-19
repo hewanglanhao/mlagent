@@ -1,0 +1,16 @@
+Write the `Per-Target Findings` section for `output.md` based on the structured target-level probe digests below.
+
+Requirements:
+- Cover every target exactly once.
+- For each target, summarize which `primary` and `cross_check` probe variants ran.
+- Explain the main outcome of each probe variant:
+  - accepted and what it observed,
+  - or rejected/failed and why.
+- Explain why the final chosen value was selected.
+- If the final chosen value came directly from `ncu`, say that explicitly.
+- If benchmark-derived values were used only as cross-check evidence, say that explicitly.
+- Do not force a rigid field template.
+- Use readable markdown suitable for placing directly under the `# Per-Target Findings` header.
+
+Target probe digests:
+{target_probe_digests}

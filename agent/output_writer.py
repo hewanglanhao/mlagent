@@ -8,11 +8,14 @@ from llm.openai_client import GPTClient
 
 from .models import BenchmarkPlan, MetricEstimate, ProbeAttempt, TargetSpec
 from .reasoning import ReasoningLogger
+from .result_inference import DERIVED_ALIASES
 
 
 PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
 SYSTEM_PROMPT_FILE = PROMPT_DIR / "summarize_output_system.txt"
 USER_PROMPT_FILE = PROMPT_DIR / "summarize_output.txt"
+PER_TARGET_SYSTEM_PROMPT_FILE = PROMPT_DIR / "summarize_per_target_system.txt"
+PER_TARGET_USER_PROMPT_FILE = PROMPT_DIR / "summarize_per_target.txt"
 
 
 class OutputGenerationModule:
@@ -30,15 +33,8 @@ class OutputGenerationModule:
     ) -> Path:
         result_json = {estimate.target: estimate.value for estimate in estimates}
         metric_cards = self._build_metric_cards(estimates, attempts)
-        analysis_lines = [
-            (
-                f"- `{card['target']}`: value=`{card['value']}`; "
-                f"method={card['method']}; "
-                f"evidence={card['evidence']}; "
-                f"confidence={card['confidence']}."
-            )
-            for card in metric_cards
-        ]
+        target_probe_digests = self._build_target_probe_digests(spec.targets, estimates, attempts)
+        analysis_body = self._build_llm_per_target_findings(target_probe_digests, estimates, attempts)
         trial_digest = self._build_trial_and_cross_validation_digest(plans, attempts)
         retry_digest = self._build_retry_and_fix_digest(plans, attempts)
         method_commitments = self._build_method_commitments()
@@ -68,7 +64,7 @@ class OutputGenerationModule:
                 "```",
                 "",
                 "# Per-Target Findings",
-                *analysis_lines,
+                analysis_body,
                 "",
                 "# Trial And Cross-Validation",
                 trial_digest,
@@ -90,6 +86,32 @@ class OutputGenerationModule:
         output_path.write_text(content, encoding="utf-8")
         self.logger.log("output_writer", "wrote_output", output_path=output_path)
         return output_path
+
+    def _build_llm_per_target_findings(
+        self,
+        target_probe_digests: list[dict[str, object]],
+        estimates: list[MetricEstimate],
+        attempts: list[ProbeAttempt],
+    ) -> str:
+        system_prompt = PER_TARGET_SYSTEM_PROMPT_FILE.read_text(encoding="utf-8")
+        prompt_template = PER_TARGET_USER_PROMPT_FILE.read_text(encoding="utf-8")
+        prompt = prompt_template.format(
+            target_probe_digests=json.dumps(target_probe_digests, ensure_ascii=False, indent=2),
+        )
+
+        try:
+            response = self.llm.complete_text(
+                system_prompt=system_prompt,
+                user_prompt=prompt,
+                max_output_tokens=2200,
+            )
+            text = response.text.strip()
+            if text:
+                return text
+        except Exception:
+            pass
+
+        return "\n".join(self._build_per_target_findings(estimates, attempts))
 
     def _build_llm_summary(
         self,
@@ -145,7 +167,8 @@ class OutputGenerationModule:
         ]
         for plan in plans:
             lines.append(
-                f"- {plan.plan_id}: {plan.probe_family}, targets={', '.join(plan.targets)}, max_rounds={plan.max_rounds}"
+                f"- {plan.plan_id}: {plan.probe_family}, target={plan.primary_target or ', '.join(plan.targets)}, "
+                f"variant={plan.probe_variant}, role={plan.plan_role}, max_rounds={plan.max_rounds}"
             )
 
         lines.append("Attempts:")
@@ -157,7 +180,8 @@ class OutputGenerationModule:
                 else "credible=unknown"
             )
             lines.append(
-                f"- {attempt.plan_id} round {attempt.round_index}: compile={attempt.compile_result.returncode if attempt.compile_result else 'n/a'}, "
+                f"- {attempt.plan_id} round {attempt.round_index}: target={attempt.primary_target}, variant={attempt.probe_variant}, "
+                f"role={attempt.plan_role}, compile={attempt.compile_result.returncode if attempt.compile_result else 'n/a'}, "
                 f"run={attempt.run_result.returncode if attempt.run_result else 'n/a'}, "
                 f"ncu={attempt.profile_result.returncode if attempt.profile_result else 'n/a'}, {validation_text}"
             )
@@ -226,6 +250,143 @@ class OutputGenerationModule:
             )
         return cards
 
+    def _build_target_probe_digests(
+        self,
+        targets: list[str],
+        estimates: list[MetricEstimate],
+        attempts: list[ProbeAttempt],
+    ) -> list[dict[str, object]]:
+        estimate_by_target = {estimate.target: estimate for estimate in estimates}
+        digests: list[dict[str, object]] = []
+        for target in targets:
+            estimate = estimate_by_target[target]
+            selected_attempt, selected_source_kind, selected_alias = self._resolve_attempt_from_source(
+                estimate.source,
+                attempts,
+            )
+            related_attempts = [attempt for attempt in attempts if attempt.primary_target == target]
+            plan_ids = []
+            for attempt in related_attempts:
+                if attempt.plan_id not in plan_ids:
+                    plan_ids.append(attempt.plan_id)
+
+            probe_runs = [
+                self._build_probe_run_digest(
+                    target=target,
+                    plan_id=plan_id,
+                    plan_attempts=[attempt for attempt in related_attempts if attempt.plan_id == plan_id],
+                    selected_attempt=selected_attempt,
+                )
+                for plan_id in plan_ids
+            ]
+            digests.append(
+                {
+                    "target": target,
+                    "final_value": self._render_value(estimate.value),
+                    "final_confidence": f"{estimate.confidence:.2f}",
+                    "final_source": estimate.source,
+                    "final_reasoning": estimate.reasoning,
+                    "selected_source_kind": selected_source_kind,
+                    "selected_alias": selected_alias,
+                    "selected_plan_id": selected_attempt.plan_id if selected_attempt else "",
+                    "probe_runs": probe_runs,
+                }
+            )
+        return digests
+
+    def _build_probe_run_digest(
+        self,
+        *,
+        target: str,
+        plan_id: str,
+        plan_attempts: list[ProbeAttempt],
+        selected_attempt: ProbeAttempt | None,
+    ) -> dict[str, object]:
+        reference_attempt = plan_attempts[0]
+        accepted_attempt = next(
+            (
+                attempt
+                for attempt in reversed(plan_attempts)
+                if attempt.validation and attempt.validation.credible
+            ),
+            None,
+        )
+        latest_attempt = plan_attempts[-1]
+        best_attempt = accepted_attempt or latest_attempt
+        observed = self._extract_target_observation(target, best_attempt)
+
+        return {
+            "plan_id": plan_id,
+            "probe_family": reference_attempt.probe_family,
+            "probe_variant": reference_attempt.probe_variant,
+            "plan_role": reference_attempt.plan_role,
+            "rounds_run": len(plan_attempts),
+            "accepted_round": accepted_attempt.round_index if accepted_attempt else None,
+            "selected_for_final_value": bool(selected_attempt and selected_attempt.plan_id == plan_id),
+            "observed_value_kind": observed["kind"],
+            "observed_value": observed["value"],
+            "observed_value_source": observed["source"],
+            "attempt_summaries": [
+                {
+                    "round_index": attempt.round_index,
+                    "compile_returncode": attempt.compile_result.returncode if attempt.compile_result else None,
+                    "run_returncode": attempt.run_result.returncode if attempt.run_result else None,
+                    "ncu_returncode": attempt.profile_result.returncode if attempt.profile_result else None,
+                    "credible": attempt.validation.credible if attempt.validation else False,
+                    "confidence": (
+                        f"{attempt.validation.confidence:.2f}" if attempt.validation else "0.00"
+                    ),
+                    "issues": attempt.validation.issues if attempt.validation else [],
+                    "cross_checks": attempt.validation.cross_checks if attempt.validation else [],
+                    "timing_trials": (
+                        len(attempt.benchmark_output.get("timings_ms", []))
+                        if isinstance(attempt.benchmark_output.get("timings_ms", []), list)
+                        else 0
+                    ),
+                }
+                for attempt in plan_attempts
+            ],
+        }
+
+    @staticmethod
+    def _extract_target_observation(target: str, attempt: ProbeAttempt | None) -> dict[str, str]:
+        if attempt is None:
+            return {"kind": "none", "value": "null", "source": ""}
+        if target in attempt.ncu_metrics:
+            return {
+                "kind": "ncu",
+                "value": OutputGenerationModule._render_value(attempt.ncu_metrics[target]),
+                "source": target,
+            }
+        derived = attempt.benchmark_output.get("derived_metrics", {})
+        for alias in DERIVED_ALIASES.get(target, []):
+            if alias in derived:
+                return {
+                    "kind": "benchmark",
+                    "value": OutputGenerationModule._render_value(derived[alias]),
+                    "source": alias,
+                }
+        return {"kind": "none", "value": "null", "source": ""}
+
+    def _build_per_target_findings(
+        self,
+        estimates: list[MetricEstimate],
+        attempts: list[ProbeAttempt],
+    ) -> list[str]:
+        lines: list[str] = []
+        for estimate in estimates:
+            attempt, source_kind, alias = self._resolve_attempt_from_source(estimate.source, attempts)
+            lines.append(
+                self._build_per_target_finding_text(
+                    estimate=estimate,
+                    attempt=attempt,
+                    source_kind=source_kind,
+                    alias=alias,
+                    attempts=attempts,
+                )
+            )
+        return lines
+
     @staticmethod
     def _resolve_attempt_from_source(
         source: str,
@@ -272,18 +433,71 @@ class OutputGenerationModule:
         timings_count = len(attempt.benchmark_output.get("timings_ms", []))
         if source_kind == "ncu":
             return (
-                f"Used the direct `ncu` metric from `{attempt.probe_family}` round {attempt.round_index} "
-                f"after {total_rounds} total round(s) for this plan; the benchmark created the profiling condition "
+                f"Used the direct `ncu` metric from `{attempt.probe_family}` variant `{attempt.probe_variant}` "
+                f"({attempt.plan_role}) in round {attempt.round_index} after {total_rounds} total round(s) for this plan; "
+                f"the benchmark created the profiling condition "
                 f"and collected {timings_count} timing sample(s) for cross-validation."
             )
         if source_kind == "benchmark":
             alias_text = f" derived metric `{alias}`" if alias else " derived benchmark metric"
             return (
-                f"Used the benchmark{alias_text} from `{attempt.probe_family}` round {attempt.round_index} "
-                f"after {total_rounds} total round(s); the value was kept only after repeated timings "
+                f"Used the benchmark{alias_text} from `{attempt.probe_family}` variant `{attempt.probe_variant}` "
+                f"({attempt.plan_role}) in round {attempt.round_index} after {total_rounds} total round(s); "
+                f"the value was kept only after repeated timings "
                 f"and `ncu` cross-checking where available."
             )
         return estimate.reasoning
+
+    def _build_per_target_finding_text(
+        self,
+        *,
+        estimate: MetricEstimate,
+        attempt: ProbeAttempt | None,
+        source_kind: str,
+        alias: str,
+        attempts: list[ProbeAttempt],
+    ) -> str:
+        if attempt is None:
+            evidence = self._build_evidence_text(estimate, attempt)
+            return (
+                f"- `{estimate.target}` remains unresolved. {estimate.reasoning} "
+                f"The current value is `{self._render_value(estimate.value)}` with confidence `{estimate.confidence:.2f}`. "
+                f"Available evidence: {evidence}"
+            )
+
+        total_rounds = max(
+            (item.round_index for item in attempts if item.plan_id == attempt.plan_id),
+            default=attempt.round_index,
+        )
+        timings = attempt.benchmark_output.get("timings_ms", [])
+        timings_count = len(timings) if isinstance(timings, list) else 0
+        value_text = self._render_value(estimate.value)
+        evidence = self._build_evidence_text(estimate, attempt)
+
+        if source_kind == "ncu":
+            origin = (
+                f"The final value is `{value_text}`, taken directly from `ncu` in "
+                f"`{attempt.probe_family}` variant `{attempt.probe_variant}` ({attempt.plan_role}) round {attempt.round_index}"
+            )
+        elif source_kind == "benchmark":
+            alias_text = f" derived metric `{alias}`" if alias else " a benchmark-side derived metric"
+            origin = (
+                f"The current value is `{value_text}`, inferred from{alias_text} in "
+                f"`{attempt.probe_family}` variant `{attempt.probe_variant}` ({attempt.plan_role}) round {attempt.round_index}"
+            )
+        else:
+            origin = f"The current value is `{value_text}`, selected from `{estimate.source}`"
+
+        timing_clause = (
+            f" The accepted run also recorded {timings_count} timing sample(s) for repeated-trial checks."
+            if timings_count
+            else ""
+        )
+        return (
+            f"- `{estimate.target}`: {origin} after {total_rounds} round(s) for this plan."
+            f"{timing_clause} Confidence is `{estimate.confidence:.2f}`. "
+            f"Supporting evidence includes: {evidence}"
+        )
 
     def _build_evidence_text(
         self,
@@ -346,7 +560,8 @@ class OutputGenerationModule:
                 cross_checks = accepted.validation.cross_checks[:2]
 
             line = (
-                f"- `{plan.plan_id}` / `{plan.probe_family}` ran {total_rounds} round(s); "
+                f"- `{plan.plan_id}` / `{plan.probe_family}` / target=`{plan.primary_target or ', '.join(plan.targets)}` / "
+                f"variant=`{plan.probe_variant}` / role=`{plan.plan_role}` ran {total_rounds} round(s); "
                 f"accepted round={accepted.round_index if accepted else 'none'}; "
                 f"accepted target(s)={', '.join(plan.targets)}; "
                 f"timing_trials={timings_count if timings_count else 'n/a'}."
@@ -399,7 +614,10 @@ class OutputGenerationModule:
                     f"round {attempt.round_index} {' / '.join(failure_bits)} because {issue_text}{retry_text}"
                 )
 
-            lines.append(f"- `{plan.plan_id}` / `{plan.probe_family}`: " + "; ".join(round_notes) + ".")
+            lines.append(
+                f"- `{plan.plan_id}` / `{plan.probe_family}` / target=`{plan.primary_target or ', '.join(plan.targets)}` / "
+                f"variant=`{plan.probe_variant}` / role=`{plan.plan_role}`: " + "; ".join(round_notes) + "."
+            )
         return "\n".join(lines)
 
     @staticmethod
@@ -459,7 +677,7 @@ class OutputGenerationModule:
             [
                 conclusion_sentence,
                 (
-                    "本次输出的逐项 target 结果已经按 value、method、evidence、confidence 结构展开；"
+                    "本次输出的逐项 target 结果已经在 Per-Target Findings 中逐项解读；"
                     f"其中代表性结果包括 {top_metrics if top_metrics else 'no resolved metrics'}。"
                 ),
                 "交叉验证与多次试验情况如下：",

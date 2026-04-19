@@ -113,6 +113,16 @@ class MicroBenchmarkGenerationModule:
 
         lines = [
             "Real target guidance for this plan:",
+            f"- Primary target: `{plan.primary_target or ', '.join(plan.targets)}`.",
+            f"- Probe variant: `{plan.probe_variant}`.",
+            f"- Plan role: `{plan.plan_role}`.",
+            (
+                "- This is the main target-specific probe for the metric. Prioritize making this one clean, auditable, "
+                "and directly useful for the target value."
+                if plan.plan_role == "primary"
+                else "- This is a supporting cross-check probe. It should stress the same target from a nearby angle, "
+                "produce extra evidence, and help confirm or reject the primary probe."
+            ),
             *family_guidance.get(plan.probe_family, []),
         ]
         for target in plan.targets:

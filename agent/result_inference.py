@@ -51,6 +51,13 @@ class ResultParsingAndInferenceModule:
         fallback_candidates: list[tuple[float, Any, str, ProbeAttempt]] = []
         for attempt in attempts:
             validation_confidence = attempt.validation.confidence if attempt.validation else 0.0
+            specificity_bonus = 0.0
+            if attempt.primary_target == target:
+                specificity_bonus += 0.08
+            if attempt.plan_role == "primary":
+                specificity_bonus += 0.04
+            elif attempt.plan_role == "cross_check":
+                specificity_bonus += 0.02
             destination = (
                 preferred_candidates
                 if preferred_probe_family is None or attempt.probe_family == preferred_probe_family
@@ -61,7 +68,7 @@ class ResultParsingAndInferenceModule:
             if self._is_usable_candidate(ncu_value):
                 destination.append(
                     (
-                        validation_confidence + 0.25,
+                        validation_confidence + 0.25 + specificity_bonus,
                         ncu_value,
                         f"ncu:{attempt.plan_id}:round{attempt.round_index}",
                         attempt,
@@ -74,7 +81,7 @@ class ResultParsingAndInferenceModule:
                 if self._is_usable_candidate(derived_value):
                     destination.append(
                         (
-                            validation_confidence + 0.10,
+                            validation_confidence + 0.10 + specificity_bonus,
                             derived_value,
                             f"benchmark:{attempt.plan_id}:round{attempt.round_index}:{alias}",
                             attempt,

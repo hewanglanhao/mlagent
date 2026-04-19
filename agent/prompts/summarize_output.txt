@@ -4,7 +4,7 @@ Requirements:
 - The very first line must be a standalone conclusion sentence starting with `结论：`.
 - Start by stating what the targets are.
 - The real target set in this project is: `launch__sm_count`, `dram__bytes_read.sum.per_second`, `dram__bytes_write.sum.per_second`, `device__attribute_max_gpu_frequency_khz`, `device__attribute_max_mem_frequency_khz`, `device__attribute_fb_bus_width`, `sm__throughput.avg.pct_of_peak_sustained_elapsed`, and `gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed`.
-- The final `output.md` already contains a structured per-target section, so your job here is to produce the high-level conclusion and inference narrative rather than another table.
+- The final `output.md` already contains a per-target findings section, and its internal wording does not need to follow a rigid template. Your job here is to produce the high-level conclusion and inference narrative rather than another table.
 - Explain which probes were used.
 - Explain how many rounds each probe ran.
 - Explain the initial results, which results were judged untrustworthy, and why.

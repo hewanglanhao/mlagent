@@ -22,6 +22,9 @@ class BenchmarkPlan:
     ncu_metrics: list[str]
     success_criteria: list[str]
     parser_expectations: list[str]
+    primary_target: str = ""
+    probe_variant: str = "default"
+    plan_role: str = "primary"
     max_rounds: int = 3
     tags: list[str] = field(default_factory=list)
     program_args: list[str] = field(default_factory=list)
@@ -31,6 +34,9 @@ class BenchmarkPlan:
             "plan_id": self.plan_id,
             "probe_family": self.probe_family,
             "targets": self.targets,
+            "primary_target": self.primary_target,
+            "probe_variant": self.probe_variant,
+            "plan_role": self.plan_role,
             "benchmark_objective": self.benchmark_objective,
             "benchmark_requirements": self.benchmark_requirements,
             "ncu_metrics": self.ncu_metrics,
@@ -69,6 +75,9 @@ class ValidationResult:
 class ProbeAttempt:
     plan_id: str
     probe_family: str
+    primary_target: str
+    probe_variant: str
+    plan_role: str
     round_index: int
     generated_source_path: str
     binary_path: str

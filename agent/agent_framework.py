@@ -94,6 +94,9 @@ class GPUProbeAgent:
             attempt = ProbeAttempt(
                 plan_id=plan.plan_id,
                 probe_family=plan.probe_family,
+                primary_target=plan.primary_target,
+                probe_variant=plan.probe_variant,
+                plan_role=plan.plan_role,
                 round_index=round_index,
                 generated_source_path=str(source_path),
                 binary_path=str(binary_path),
