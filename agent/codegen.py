@@ -74,27 +74,32 @@ class MicroBenchmarkGenerationModule:
             ),
             "dram__bytes_read.sum.per_second": (
                 "- `dram__bytes_read.sum.per_second` needs a clearly read-dominant DRAM streaming phase. "
-                "The working set must be well beyond L2 capacity and the access pattern should be as coalesced as possible."
+                "The working set must be well beyond L2 capacity and the access pattern should be as coalesced as possible. "
+                "A high `gpu__compute_memory_throughput` value alone is not enough; the profiled row must also show strong `dram__throughput` and minimal opposite-direction traffic."
             ),
             "dram__bytes_write.sum.per_second": (
                 "- `dram__bytes_write.sum.per_second` needs a clearly write-dominant DRAM streaming phase. "
-                "Do not mix heavy read-modify-write behavior into the same dominant phase, or `ncu` will have trouble separating read and write throughput."
+                "Do not mix heavy read-modify-write behavior into the same dominant phase, or `ncu` will have trouble separating read and write throughput. "
+                "A high `gpu__compute_memory_throughput` value alone is not enough; the profiled row must also show strong `dram__throughput` and minimal opposite-direction traffic."
             ),
             "device__attribute_max_gpu_frequency_khz": (
                 "- `device__attribute_max_gpu_frequency_khz` is a direct `ncu` metric. Generate a sufficiently long-lived, clearly compute-bound, FMA-heavy kernel so the frequency and `sm__throughput` readings are trustworthy."
             ),
             "device__attribute_max_mem_frequency_khz": (
-                "- `device__attribute_max_mem_frequency_khz` is a direct `ncu` metric. The benchmark should create a stable DRAM-intensive condition rather than trying to infer memory frequency from formulas alone."
+                "- `device__attribute_max_mem_frequency_khz` is a direct `ncu` metric. The benchmark should create a stable DRAM-intensive condition rather than trying to infer memory frequency from formulas alone. "
+                "Use `dram__throughput.avg.pct_of_peak_sustained_elapsed` as the main saturation proof for this target."
             ),
             "device__attribute_fb_bus_width": (
-                "- `device__attribute_fb_bus_width` should also be treated as a direct `ncu` or device-side observation. Do not hardcode bus width values and do not rely on spec-sheet knowledge."
+                "- `device__attribute_fb_bus_width` should also be treated as a direct `ncu` or device-side observation. Do not hardcode bus width values and do not rely on spec-sheet knowledge. "
+                "Use `dram__throughput.avg.pct_of_peak_sustained_elapsed` as the main saturation proof for this target."
             ),
             "sm__throughput.avg.pct_of_peak_sustained_elapsed": (
                 "- `sm__throughput.avg.pct_of_peak_sustained_elapsed` needs high arithmetic intensity, low DRAM interference, and enough blocks so the compute utilization observed by `ncu` is meaningful."
             ),
             "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed": (
                 "- `gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed` needs a truly memory-bound kernel. "
-                "Prefer a large working set, low arithmetic intensity, and sustained streaming accesses."
+                "Prefer a large working set, low arithmetic intensity, and sustained streaming accesses. "
+                "Keep the profiled read-heavy and write-heavy rows cleanly separated so incidental opposite-direction traffic is not mistaken for a standalone throughput target."
             ),
         }
 
@@ -107,6 +112,7 @@ class MicroBenchmarkGenerationModule:
             "bandwidth_probe": [
                 "- For the real bandwidth and memory targets in this project, the main goal is to create a stable DRAM streaming workload.",
                 "- Prefer two clean read-heavy and write-heavy phases or two separate kernels, and report separate cross-check bandwidth values in JSON.",
+                "- For DRAM read/write targets, treat `dram__throughput.avg.pct_of_peak_sustained_elapsed` as the main proof that the selected profiling row is truly DRAM-bound; `gpu__compute_memory_throughput` alone is not sufficient.",
                 "- For `device__attribute_max_mem_frequency_khz` and `device__attribute_fb_bus_width`, the benchmark only needs to create a trustworthy profiling condition.",
             ],
         }

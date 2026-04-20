@@ -109,7 +109,7 @@ class GPTClient:
                         response = self._client.responses.create(
                             model=selected_model,
                             instructions=system_prompt,
-                            input=user_prompt,
+                            input=self._build_responses_input(user_prompt),
                             max_output_tokens=max_output_tokens,
                             reasoning={"effort": selected_effort},
                             timeout=timeout_s,
@@ -172,6 +172,20 @@ class GPTClient:
                 return GPTClient._extract_responses_text(dumped)
 
         return ""
+
+    @staticmethod
+    def _build_responses_input(user_prompt: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": user_prompt,
+                    }
+                ],
+            }
+        ]
 
     @staticmethod
     def _extract_chat_text(response: Any) -> str:

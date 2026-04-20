@@ -62,6 +62,8 @@ Probe-family guidance:
 For the real target set in this project:
 - If the plan targets `launch__sm_count`, `device__attribute_max_gpu_frequency_khz`, or `sm__throughput.avg.pct_of_peak_sustained_elapsed`, prefer a compute-bound kernel with high arithmetic intensity and minimal DRAM pressure.
 - If the plan targets `dram__bytes_read.sum.per_second`, `dram__bytes_write.sum.per_second`, `device__attribute_max_mem_frequency_khz`, `device__attribute_fb_bus_width`, or `gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed`, prefer a memory-bound kernel with a large working set and clearly separated read/write behavior.
+- For DRAM read/write targets, make the profiled row itself directionally clean: the read target should come from a read-dominant row, the write target should come from a write-dominant row, and incidental opposite-direction traffic should stay small.
+- For DRAM-side targets, treat `dram__throughput.avg.pct_of_peak_sustained_elapsed` as the main saturation proof. A high `gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed` value alone is not sufficient.
 - Avoid mixing many tiny kernels together; a single dominant kernel is easier for `ncu` to attribute.
 - If you output an estimated frequency, bandwidth, or any other derived metric, treat it as cross-validation evidence rather than as a replacement for the direct `ncu` targets.
 - Include the actual profiling-mode choices in `parameters`, for example `profile_mode`, `warmup`, `repeats`, and any scaled loop or sweep settings that were applied.

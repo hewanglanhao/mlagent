@@ -3,6 +3,11 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from .consistency import (
+    benchmark_value_is_physically_plausible,
+    assess_memory_target_observation,
+    select_ncu_observation,
+)
 from .models import MetricEstimate, ProbeAttempt
 from .reasoning import ReasoningLogger
 
@@ -48,44 +53,72 @@ class ResultParsingAndInferenceModule:
         preferred_probe_family: str | None = None,
     ) -> MetricEstimate:
         candidates: list[dict[str, Any]] = []
+        rejected_reasons: list[str] = []
         for attempt in attempts:
-            ncu_value = attempt.ncu_metrics.get(target)
+            observation = select_ncu_observation(attempt, target)
+            ncu_value = observation.get(target)
             if self._is_usable_candidate(ncu_value):
-                candidates.append(
-                    self._build_candidate(
-                        target=target,
-                        attempt=attempt,
-                        value=ncu_value,
-                        source_kind="ncu",
-                        source=f"ncu:{attempt.plan_id}:round{attempt.round_index}",
-                        preferred_probe_family=preferred_probe_family,
+                acceptable, reasons = assess_memory_target_observation(target, attempt, observation)
+                if target not in {
+                    "dram__bytes_read.sum.per_second",
+                    "dram__bytes_write.sum.per_second",
+                    "device__attribute_max_mem_frequency_khz",
+                    "device__attribute_fb_bus_width",
+                    "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",
+                } or acceptable:
+                    candidates.append(
+                        self._build_candidate(
+                            target=target,
+                            attempt=attempt,
+                            value=ncu_value,
+                            source_kind="ncu",
+                            source=f"ncu:{attempt.plan_id}:round{attempt.round_index}",
+                            preferred_probe_family=preferred_probe_family,
+                        )
                     )
-                )
+                else:
+                    rejected_reasons.extend(reasons[:2])
 
             derived = attempt.benchmark_output.get("derived_metrics", {})
             for alias in DERIVED_ALIASES.get(target, []):
                 derived_value = derived.get(alias)
                 if self._is_usable_candidate(derived_value):
-                    candidates.append(
-                        self._build_candidate(
-                            target=target,
-                            attempt=attempt,
-                            value=derived_value,
-                            source_kind="benchmark",
-                            source=f"benchmark:{attempt.plan_id}:round{attempt.round_index}:{alias}",
-                            preferred_probe_family=preferred_probe_family,
-                        )
+                    plausible, reason = benchmark_value_is_physically_plausible(
+                        target,
+                        attempt,
+                        derived_value,
                     )
+                    if plausible:
+                        candidates.append(
+                            self._build_candidate(
+                                target=target,
+                                attempt=attempt,
+                                value=derived_value,
+                                source_kind="benchmark",
+                                source=f"benchmark:{attempt.plan_id}:round{attempt.round_index}:{alias}",
+                                preferred_probe_family=preferred_probe_family,
+                            )
+                        )
+                    elif reason:
+                        rejected_reasons.append(reason)
 
         if not candidates:
+            rejection_summary = (
+                " Candidate filtering rejected all available observations as physically inconsistent or not target-suitable."
+                if rejected_reasons
+                else ""
+            )
             return MetricEstimate(
                 target=target,
                 value=None,
                 confidence=0.0,
                 source="unresolved",
-                reasoning="No usable benchmark or ncu evidence was found, so the target could not be resolved.",
+                reasoning=(
+                    "No usable benchmark or ncu evidence was found, so the target could not be resolved."
+                    + rejection_summary
+                ),
                 selection_rule="No selection rule could be applied because no usable evidence was found.",
-                evidence=[],
+                evidence=rejected_reasons[:3],
             )
 
         candidates.sort(key=self._candidate_sort_key)
@@ -206,10 +239,10 @@ class ResultParsingAndInferenceModule:
         if tier == 2:
             return "Rule 3: fall back to an accepted shared probe in the same probe family because the target's own accepted rounds did not resolve this metric."
         if tier == 3:
-            return "Rule 4: fall back to an accepted same-family benchmark-derived value because no accepted direct measurement resolved this metric."
+            return "Rule 3: fall back to an accepted same-family benchmark-derived value because the target's own accepted rounds did not resolve this metric."
         if tier in {4, 5, 6, 7}:
-            return "Rule 5: no accepted round resolved this metric, so a lower-confidence same-family fallback was used."
-        return "Rule 6: no same-family accepted evidence resolved this metric, so a last-resort fallback from other evidence was used."
+            return "Rule 4: no accepted same-family evidence resolved this metric, so a lower-confidence same-family fallback was used after physical-consistency filtering."
+        return "Rule 4: no accepted same-family evidence resolved this metric, so a last-resort fallback from other evidence was used after physical-consistency filtering."
 
     @staticmethod
     def _normalize_value(target: str, value: Any) -> Any:

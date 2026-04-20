@@ -10,6 +10,7 @@ Requirements:
 - Explain the initial results, which results were judged untrustworthy, and why.
 - Explain why the final values were accepted.
 - Explain the predefined final-value selection rules before discussing individual outcomes.
+- Explicitly mention that DRAM-side candidates were filtered for physical consistency against the same row's `dram__throughput` and the memory-frequency/bus-width-implied peak.
 - Make it explicit when a metric used a fallback rule and was taken from a shared probe rather than the target's own accepted round.
 - Clearly distinguish which metrics were taken directly from `ncu` and which were only benchmark-side cross-check evidence.
 - Explicitly mention repeated trials.
@@ -19,6 +20,7 @@ Requirements:
 - Do not incorrectly describe `device__attribute_max_mem_frequency_khz` or `device__attribute_fb_bus_width` as directly measured by the benchmark unless the provided evidence explicitly supports that claim.
 - For `frequency_probe`, focus on whether it successfully created a compute-bound condition.
 - For `bandwidth_probe`, focus on whether it successfully created a memory-bound condition and whether read and write throughput were cleanly separated.
+- Do not describe incidental opposite-direction traffic from a read-oriented or write-oriented row as if it were a standalone final target value.
 - Keep the tone concise, technical, and engineering-oriented.
 
 Target-specific guidance:

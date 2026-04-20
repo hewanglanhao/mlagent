@@ -4,6 +4,18 @@ import math
 import statistics
 from typing import Any
 
+from .consistency import (
+    DRAM_READ_TARGET,
+    DRAM_THROUGHPUT_TARGET,
+    DRAM_WRITE_TARGET,
+    FB_BUS_WIDTH_TARGET,
+    GPU_MEMORY_THROUGHPUT_TARGET,
+    MEMORY_FREQ_TARGET,
+    assess_memory_target_observation,
+    coerce_float,
+    implied_dram_peak_pct,
+    select_ncu_observation,
+)
 from .models import BenchmarkPlan, ProbeAttempt, ValidationResult
 from .reasoning import ReasoningLogger
 
@@ -80,7 +92,10 @@ class CrossValidationModule:
         confidence: float,
     ) -> ValidationResult:
         normalized_confidence = max(0.0, min(1.0, confidence))
-        credible = normalized_confidence >= 0.6 and not any("failed" in issue.lower() for issue in issues)
+        blocking_markers = ("failed", "not suitable", "physical consistency check")
+        credible = normalized_confidence >= 0.6 and not any(
+            marker in issue.lower() for issue in issues for marker in blocking_markers
+        )
         result = ValidationResult(
             credible=credible,
             confidence=normalized_confidence,
@@ -116,17 +131,24 @@ class CrossValidationModule:
         supporting_evidence: list[str],
     ) -> float:
         confidence = 0.0
+        target = attempt.primary_target
+        observation = select_ncu_observation(attempt, target)
         derived = attempt.benchmark_output.get("derived_metrics", {})
-        read_bench = self._coerce_float(derived.get("read_bytes_per_second"))
-        write_bench = self._coerce_float(derived.get("write_bytes_per_second"))
-        read_ncu = attempt.ncu_metrics.get("dram__bytes_read.sum.per_second")
-        write_ncu = attempt.ncu_metrics.get("dram__bytes_write.sum.per_second")
+        read_bench = coerce_float(derived.get("read_bytes_per_second"))
+        write_bench = coerce_float(derived.get("write_bytes_per_second"))
+        read_ncu = coerce_float(observation.get(DRAM_READ_TARGET))
+        write_ncu = coerce_float(observation.get(DRAM_WRITE_TARGET))
 
         deltas: list[float] = []
-        if read_bench and read_ncu:
+        if target == DRAM_READ_TARGET and read_bench and read_ncu:
             deltas.append(abs(read_bench - read_ncu) / max(abs(read_ncu), 1.0))
-        if write_bench and write_ncu:
+        elif target == DRAM_WRITE_TARGET and write_bench and write_ncu:
             deltas.append(abs(write_bench - write_ncu) / max(abs(write_ncu), 1.0))
+        else:
+            if read_bench and read_ncu:
+                deltas.append(abs(read_bench - read_ncu) / max(abs(read_ncu), 1.0))
+            if write_bench and write_ncu:
+                deltas.append(abs(write_bench - write_ncu) / max(abs(write_ncu), 1.0))
 
         if deltas:
             worst_delta = max(deltas)
@@ -142,17 +164,42 @@ class CrossValidationModule:
         else:
             issues.append("The bandwidth probe is missing benchmark-side or ncu-side read/write bandwidth observations for comparison.")
 
-        mem_throughput = attempt.ncu_metrics.get(
-            "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed"
-        )
-        if mem_throughput is not None and mem_throughput >= 30:
-            confidence += 0.1
+        suitable, suitability_issues = assess_memory_target_observation(target, attempt, observation)
+        issues.extend(suitability_issues)
+
+        dram_throughput = coerce_float(observation.get(DRAM_THROUGHPUT_TARGET))
+        gpu_mem_throughput = coerce_float(observation.get(GPU_MEMORY_THROUGHPUT_TARGET))
+        implied_pct = implied_dram_peak_pct(observation)
+
+        if target in {
+            DRAM_READ_TARGET,
+            DRAM_WRITE_TARGET,
+            MEMORY_FREQ_TARGET,
+            FB_BUS_WIDTH_TARGET,
+        }:
+            if dram_throughput is not None and suitable:
+                confidence += 0.1
+                supporting_evidence.append(
+                    f"DRAM throughput reached {dram_throughput:.2f}% of peak in the selected row, indicating that the probe applied real DRAM pressure."
+                )
+            elif dram_throughput is not None:
+                issues.append(
+                    f"DRAM throughput reached only {dram_throughput:.2f}% of peak in the selected row, so this probe did not establish a trustworthy DRAM-bound condition for the target."
+                )
+        elif target == GPU_MEMORY_THROUGHPUT_TARGET:
+            if gpu_mem_throughput is not None and gpu_mem_throughput >= 30:
+                confidence += 0.1
+                supporting_evidence.append(
+                    f"Compute-memory throughput reached {gpu_mem_throughput:.2f}% of peak in the selected row."
+                )
+            elif gpu_mem_throughput is not None:
+                issues.append(
+                    f"Compute-memory throughput reached only {gpu_mem_throughput:.2f}% of peak, so the probe may not have been sufficiently memory-bound for this target."
+                )
+
+        if implied_pct is not None and dram_throughput is not None:
             supporting_evidence.append(
-                f"Memory throughput reached {mem_throughput:.2f}% of peak, indicating that the probe applied meaningful DRAM pressure."
-            )
-        elif mem_throughput is not None:
-            issues.append(
-                f"Memory throughput reached only {mem_throughput:.2f}% of peak, so the probe may not have fully saturated DRAM."
+                f"The selected row's DRAM byte rate implies about {implied_pct:.2f}% of peak, versus `dram__throughput` at {dram_throughput:.2f}%."
             )
         return confidence
 
@@ -165,7 +212,7 @@ class CrossValidationModule:
     ) -> float:
         confidence = 0.0
         derived = attempt.benchmark_output.get("derived_metrics", {})
-        freq_bench = self._coerce_float(derived.get("sm_clock_khz_estimate"))
+        freq_bench = coerce_float(derived.get("sm_clock_khz_estimate"))
         freq_ncu = attempt.ncu_metrics.get("device__attribute_max_gpu_frequency_khz")
 
         if freq_ncu:
@@ -222,7 +269,7 @@ class CrossValidationModule:
         supporting_evidence: list[str],
     ) -> float:
         derived = attempt.benchmark_output.get("derived_metrics", {})
-        penalty = self._coerce_float(derived.get("bank_conflict_penalty_cycles"))
+        penalty = coerce_float(derived.get("bank_conflict_penalty_cycles"))
         conflict_metric = attempt.ncu_metrics.get("l1tex__data_bank_conflicts_pipe_lsu.sum")
         confidence = 0.0
         if penalty and penalty > 0:
@@ -251,7 +298,7 @@ class CrossValidationModule:
         supporting_evidence: list[str],
     ) -> float:
         derived = attempt.benchmark_output.get("derived_metrics", {})
-        capacity = self._coerce_float(
+        capacity = coerce_float(
             derived.get("l2_capacity_bytes") or derived.get("cache_capacity_bytes")
         )
         sweep_points = attempt.benchmark_output.get("sweep_points", [])
@@ -267,9 +314,3 @@ class CrossValidationModule:
             return confidence
         issues.append("The cache-capacity probe did not provide enough sweep points.")
         return confidence
-
-    @staticmethod
-    def _coerce_float(value: Any) -> float | None:
-        if isinstance(value, (int, float)) and math.isfinite(value):
-            return float(value)
-        return None

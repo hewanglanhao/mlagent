@@ -437,10 +437,10 @@ class TargetProbePlanningModule:
                     ],
                     ncu_metrics=[
                         "dram__bytes_read.sum.per_second",
-                        "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",
+                        "dram__throughput.avg.pct_of_peak_sustained_elapsed",
                     ],
                     success_criteria=[
-                        "ncu read bandwidth and benchmark-side read bandwidth agree closely"
+                        "ncu read bandwidth and benchmark-side read bandwidth agree closely, and the selected row is clearly DRAM-bound"
                     ],
                 ),
                 self._variant(
@@ -472,10 +472,10 @@ class TargetProbePlanningModule:
                     ],
                     ncu_metrics=[
                         "dram__bytes_write.sum.per_second",
-                        "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",
+                        "dram__throughput.avg.pct_of_peak_sustained_elapsed",
                     ],
                     success_criteria=[
-                        "ncu write bandwidth and benchmark-side write bandwidth agree closely"
+                        "ncu write bandwidth and benchmark-side write bandwidth agree closely, and the selected row is clearly DRAM-bound"
                     ],
                 ),
                 self._variant(
@@ -527,6 +527,7 @@ class TargetProbePlanningModule:
                     ncu_metrics=[
                         "device__attribute_max_mem_frequency_khz",
                         "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",
+                        "dram__throughput.avg.pct_of_peak_sustained_elapsed",
                     ],
                     success_criteria=[
                         "memory frequency remains stable across nearby memory-heavy sweep points"

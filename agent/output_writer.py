@@ -236,6 +236,8 @@ class OutputGenerationModule:
             "- Do not claim that the benchmark directly measured `launch__sm_count`, `device__attribute_max_gpu_frequency_khz`, `device__attribute_max_mem_frequency_khz`, or `device__attribute_fb_bus_width` unless the evidence explicitly shows a benchmark-side derivation.",
             "- The purpose of `frequency_probe` is to create a compute-bound condition so the `ncu` values for `launch__sm_count`, `device__attribute_max_gpu_frequency_khz`, and `sm__throughput.avg.pct_of_peak_sustained_elapsed` are credible.",
             "- The purpose of `bandwidth_probe` is to create a memory-bound condition so the `ncu` values for `dram__bytes_read.sum.per_second`, `dram__bytes_write.sum.per_second`, `device__attribute_max_mem_frequency_khz`, `device__attribute_fb_bus_width`, and `gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed` are credible.",
+            "- For DRAM read/write targets, the final value must come from a directionally clean profiling row of the same direction; incidental opposite-direction traffic from another row must not be promoted into a standalone target value.",
+            "- For DRAM-side targets, the selected row must be physically consistent with `dram__throughput.avg.pct_of_peak_sustained_elapsed` and with the memory-frequency/bus-width-implied peak before it can be treated as a final-value candidate.",
             "- Final-value selection must follow the predeclared rule order: prefer the target's own accepted round, and only fall back to shared probes when the target's own accepted rounds did not resolve the metric.",
             "- Only call something `cross-validation` when benchmark-side and `ncu`-side measurements agree within the configured threshold. Stable timings, high throughput, or a returned `ncu` metric are supporting evidence, not cross-validation by themselves.",
             "- If a final metric value mainly comes from `ncu`, say explicitly that it was taken directly from `ncu`. If it only comes from benchmark cross-checking, describe it as cross-validation evidence. If benchmark and `ncu` disagree materially, call it a mismatch or failed consistency check instead.",
@@ -680,6 +682,7 @@ class OutputGenerationModule:
                 "- The agent did not rely on static spec sheets, online lookup tables, or API-based attribute queries as the primary source of truth.",
                 "- Prompt constraints explicitly forbid using `cudaGetDeviceProperties`, `cudaDeviceGetAttribute`, `nvidia-smi`, or similar static/device-query shortcuts as the main measurement method.",
                 "- Final values follow a predeclared rule order: prefer the target's own accepted round first, and only fall back to shared probes if the target's own accepted rounds do not resolve the metric.",
+                "- For DRAM-side targets, the agent rejects candidates that are not physically consistent with the same row's `dram__throughput` and the row's memory-frequency/bus-width-implied peak, and it does not promote incidental opposite-direction traffic into a final read/write target value.",
                 "- Benchmark-derived numbers are only called cross-validation evidence when benchmark-side and `ncu`-side values agree within threshold; otherwise they are treated as mismatch diagnostics or supporting context only.",
             ]
         )
@@ -755,8 +758,9 @@ class OutputGenerationModule:
                 "2. If that is unavailable, use the target's own accepted benchmark-derived value.",
                 "3. If the target's own accepted rounds do not resolve the metric, fall back to an accepted shared probe from the same probe family.",
                 "4. Only if no accepted same-family evidence resolves the metric may the system use lower-confidence or cross-family fallback evidence, and the report must say so explicitly.",
-                "5. Within the same rule tier, prefer `primary` over `cross_check`, then prefer higher validation confidence and later repaired rounds.",
-                "6. `Cross-validation` means benchmark-side and `ncu`-side values agree within threshold; stable timing, high throughput, or returned `ncu` metrics alone are only supporting evidence.",
+                "5. For DRAM-side targets, reject candidate values that are not physically consistent with the same row's `dram__throughput` and memory-frequency/bus-width-implied peak, and reject incidental opposite-direction traffic as a final read/write value.",
+                "6. Within the same rule tier, prefer `primary` over `cross_check`, then prefer higher validation confidence and later repaired rounds.",
+                "7. `Cross-validation` means benchmark-side and `ncu`-side values agree within threshold; stable timing, high throughput, or returned `ncu` metrics alone are only supporting evidence.",
             ]
         )
 

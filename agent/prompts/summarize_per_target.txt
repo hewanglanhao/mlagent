@@ -12,6 +12,7 @@ Requirements:
 - If the final chosen value came directly from `ncu`, say that explicitly.
 - If benchmark-derived values were used only as cross-check evidence, say that explicitly.
 - Use the phrase `cross-validation` only when benchmark-side and `ncu`-side values agree within threshold. Otherwise describe the information as supporting evidence or mismatch diagnostics.
+- For DRAM-side targets, mention when a candidate was rejected because it was not physically consistent with the same row's `dram__throughput` or because the row was not cleanly read-dominant or write-dominant for that target.
 - Do not force a rigid field template.
 - Use readable markdown suitable for placing directly under the `# Per-Target Findings` header.
 
