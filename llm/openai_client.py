@@ -1,4 +1,5 @@
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -9,14 +10,35 @@ def _clean_env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
+def _clean_int_env(name: str, default: int) -> int:
+    raw = _clean_env(name, str(default))
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _clean_float_env(name: str, default: float) -> float:
+    raw = _clean_env(name, str(default))
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 DEFAULT_MODEL = _clean_env("BASE_MODEL", "gpt-5.4")
 DEFAULT_REASONING_EFFORT = _clean_env("OPENAI_REASONING_EFFORT", "medium")
 DEFAULT_PRIMARY_API = _clean_env("OPENAI_PRIMARY_API", "chat.completions").lower()
+DEFAULT_REQUEST_TIMEOUT_S = _clean_float_env("OPENAI_REQUEST_TIMEOUT_S", 200.0)
+DEFAULT_REQUEST_RETRY_ATTEMPTS = _clean_int_env("OPENAI_REQUEST_RETRY_ATTEMPTS", 2)
+DEFAULT_REQUEST_RETRY_BACKOFF_S = _clean_float_env("OPENAI_REQUEST_RETRY_BACKOFF_S", 2.0)
+DEFAULT_SDK_MAX_RETRIES = _clean_int_env("OPENAI_SDK_MAX_RETRIES", 0)
 
 client = OpenAI(
     api_key=_clean_env("API_KEY", ""),
     base_url=_clean_env("BASE_URL", ""),
-    max_retries=4,
+    timeout=DEFAULT_REQUEST_TIMEOUT_S,
+    max_retries=DEFAULT_SDK_MAX_RETRIES,
 )
 
 
@@ -52,52 +74,66 @@ class GPTClient:
         selected_effort = (
             reasoning_effort or _clean_env("OPENAI_REASONING_EFFORT", DEFAULT_REASONING_EFFORT)
         ).strip()
+        timeout_s = max(1.0, _clean_float_env("OPENAI_REQUEST_TIMEOUT_S", DEFAULT_REQUEST_TIMEOUT_S))
+        retry_attempts = max(1, _clean_int_env("OPENAI_REQUEST_RETRY_ATTEMPTS", DEFAULT_REQUEST_RETRY_ATTEMPTS))
+        retry_backoff_s = max(
+            0.0,
+            _clean_float_env("OPENAI_REQUEST_RETRY_BACKOFF_S", DEFAULT_REQUEST_RETRY_BACKOFF_S),
+        )
         error_messages: list[str] = []
         last_error: Exception | None = None
 
         for api_mode in self._api_order():
-            try:
-                if api_mode == "chat.completions":
-                    response = self._client.chat.completions.create(
-                        model=selected_model,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                    )
-                    text = self._extract_chat_text(response)
-                    if text:
-                        if self._looks_like_html(text):
-                            error_messages.append(self._html_response_hint())
-                        else:
-                            return LLMResponse(text=text, api_mode="chat.completions")
-                    error_messages.append(
-                        f"Chat Completions API returned an empty payload of type {type(response).__name__}."
-                    )
-                    continue
-
-                response = self._client.responses.create(
-                    model=selected_model,
-                    instructions=system_prompt,
-                    input=user_prompt,
-                    max_output_tokens=max_output_tokens,
-                    reasoning={"effort": selected_effort},
-                )
-                text = self._extract_responses_text(response)
-                if text:
-                    if self._looks_like_html(text):
-                        error_messages.append(self._html_response_hint())
+            for attempt_index in range(1, retry_attempts + 1):
+                try:
+                    if api_mode == "chat.completions":
+                        response = self._client.chat.completions.create(
+                            model=selected_model,
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_prompt},
+                            ],
+                            timeout=timeout_s,
+                        )
+                        text = self._extract_chat_text(response)
+                        if text:
+                            if self._looks_like_html(text):
+                                error_messages.append(self._html_response_hint())
+                            else:
+                                return LLMResponse(text=text, api_mode="chat.completions")
+                        error_messages.append(
+                            "Chat Completions API returned an empty payload "
+                            f"on attempt {attempt_index}/{retry_attempts} of type {type(response).__name__}."
+                        )
                     else:
-                        return LLMResponse(text=text, api_mode="responses")
-                error_messages.append(
-                    f"Responses API returned an empty payload of type {type(response).__name__}."
-                )
-            except Exception as exc:
-                last_error = exc
-                if api_mode == "chat.completions":
-                    error_messages.append(f"Chat Completions API failed: {exc}")
-                else:
-                    error_messages.append(f"Responses API failed: {exc}")
+                        response = self._client.responses.create(
+                            model=selected_model,
+                            instructions=system_prompt,
+                            input=user_prompt,
+                            max_output_tokens=max_output_tokens,
+                            reasoning={"effort": selected_effort},
+                            timeout=timeout_s,
+                        )
+                        text = self._extract_responses_text(response)
+                        if text:
+                            if self._looks_like_html(text):
+                                error_messages.append(self._html_response_hint())
+                            else:
+                                return LLMResponse(text=text, api_mode="responses")
+                        error_messages.append(
+                            "Responses API returned an empty payload "
+                            f"on attempt {attempt_index}/{retry_attempts} of type {type(response).__name__}."
+                        )
+                except Exception as exc:
+                    last_error = exc
+                    prefix = "Chat Completions API" if api_mode == "chat.completions" else "Responses API"
+                    error_messages.append(
+                        f"{prefix} attempt {attempt_index}/{retry_attempts} failed: {exc}"
+                    )
+                    if attempt_index < retry_attempts and self._should_retry_exception(exc):
+                        time.sleep(retry_backoff_s * attempt_index)
+                        continue
+                break
 
         raise RuntimeError(
             "Both Chat Completions API and Responses API failed while calling the model. "
@@ -240,6 +276,24 @@ class GPTClient:
             "BASE_URL likely points to a web UI rather than an OpenAI-compatible API endpoint. "
             "Try using a BASE_URL that ends with `/v1`."
         )
+
+    @staticmethod
+    def _should_retry_exception(exc: Exception) -> bool:
+        text = f"{type(exc).__name__}: {exc}".lower()
+        retry_markers = (
+            "timeout",
+            "timed out",
+            "connection",
+            "readerror",
+            "reset by peer",
+            "temporarily unavailable",
+            "server disconnected",
+            "502",
+            "503",
+            "504",
+            "rate limit",
+        )
+        return any(marker in text for marker in retry_markers)
 
 
 gpt_client = GPTClient()

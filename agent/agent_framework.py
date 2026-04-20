@@ -24,7 +24,7 @@ from .validation import CrossValidationModule
 
 
 DEFAULT_WORKSPACE_ROOT = Path("/workspace")
-EARLY_STOP_PRIMARY_CONFIDENCE = 0.80
+EARLY_STOP_PRIMARY_CONFIDENCE = 0.75
 
 
 class GPUProbeAgent:
